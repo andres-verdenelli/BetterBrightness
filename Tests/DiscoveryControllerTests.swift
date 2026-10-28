@@ -80,5 +80,7 @@ struct DiscoveryControllerTests {
         precondition(discovery.lastSummary == nil)
         precondition(store.configuration.lights.first?.ip == "192.0.2.20")
         print("PASS: save failures surface without partially applying discovery")
+
+        try LightDraftTests.run()
     }
 }

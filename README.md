@@ -117,6 +117,7 @@ macOS will ask for Local Network access because discovery and control cannot wor
 | `WiZDiscoveryService.swift` | UDP broadcast discovery and response parsing |
 | `DiscoveryController.swift` | Shared discovery progress, results, and errors, independent of Settings |
 | `SettingsView.swift` | Native settings interface and per-light controls |
+| `LightDraft.swift` | Editable light settings that preserve unsaved manual IP changes during discovery |
 | `BrightnessRangeControl.swift` | A shared range track with two native AppKit thumbs, keyboard and accessibility support |
 
 See [ROADMAP.md](ROADMAP.md) for implementation notes and possible future improvements.

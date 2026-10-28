@@ -1,88 +1,6 @@
 import AppKit
 import SwiftUI
 
-private struct LightDraft: Identifiable {
-    let id: UUID
-    var name: String
-    var macAddress: String?
-    var ip: String
-    var isIPAddressVerified: Bool
-    var isEnabled: Bool
-    var monitorMin: Int
-    var monitorMax: Int
-    var lightMinPercent: Int
-    var lightMaxPercent: Int
-    var deviceInfo: WiZDeviceInfo?
-
-    init(
-        id: UUID = UUID(),
-        name: String = "",
-        macAddress: String? = nil,
-        ip: String = "",
-        isIPAddressVerified: Bool = true,
-        isEnabled: Bool = false,
-        monitorMin: Int = 40,
-        monitorMax: Int = 80,
-        lightMinPercent: Int = 1,
-        lightMaxPercent: Int = 100,
-        deviceInfo: WiZDeviceInfo? = nil
-    ) {
-        self.id = id
-        self.name = name
-        self.macAddress = macAddress
-        self.ip = ip
-        self.isIPAddressVerified = isIPAddressVerified
-        self.isEnabled = isEnabled
-        self.monitorMin = monitorMin
-        self.monitorMax = monitorMax
-        self.lightMinPercent = lightMinPercent
-        self.lightMaxPercent = lightMaxPercent
-        self.deviceInfo = deviceInfo
-    }
-
-    init(configuration: LightConfiguration) {
-        id = configuration.id
-        name = configuration.name
-        macAddress = configuration.macAddress
-        ip = configuration.ip
-        isIPAddressVerified = configuration.isIPAddressVerified
-        isEnabled = configuration.isEnabled
-        monitorMin = Int(configuration.mapping.monitorMin.rounded())
-        monitorMax = Int(configuration.mapping.monitorMax.rounded())
-        lightMinPercent = Int(
-            configuration.mapping.lightMinPercent.rounded()
-        )
-        lightMaxPercent = Int(
-            configuration.mapping.lightMaxPercent.rounded()
-        )
-        deviceInfo = configuration.deviceInfo
-    }
-
-    var configuration: LightConfiguration {
-        LightConfiguration(
-            id: id,
-            name: name,
-            macAddress: macAddress,
-            ip: ip,
-            isIPAddressVerified: isIPAddressVerified,
-            isEnabled: isEnabled,
-            port: 38899,
-            mapping: BrightnessMapping(
-                monitorMin: Double(monitorMin),
-                monitorMax: Double(monitorMax),
-                lightMinPercent: Double(lightMinPercent),
-                lightMaxPercent: Double(lightMaxPercent)
-            ),
-            deviceInfo: deviceInfo
-        )
-    }
-
-    var displayName: String {
-        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmedName.isEmpty ? "Unnamed Light" : trimmedName
-    }
-}
-
 struct SettingsView: View {
     @ObservedObject var configurationStore: ConfigurationStore
 
@@ -490,11 +408,7 @@ struct SettingsView: View {
     private func mergeDiscoveryChangesIntoDrafts(_ configuration: AppConfiguration) {
         for saved in configuration.lights {
             if let index = lights.firstIndex(where: { $0.id == saved.id }) {
-                // Discovery owns identity and address; retain in-progress user edits.
-                lights[index].macAddress = saved.macAddress
-                lights[index].ip = saved.ip
-                lights[index].isIPAddressVerified = saved.isIPAddressVerified
-                lights[index].deviceInfo = saved.deviceInfo
+                lights[index].mergeDiscoveryChanges(saved)
             } else {
                 lights.append(LightDraft(configuration: saved))
             }

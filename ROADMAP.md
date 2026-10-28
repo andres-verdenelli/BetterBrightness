@@ -7,7 +7,7 @@ This document separates the current behavior from possible future work.
 | Area | Status | What the app does today |
 | --- | --- | --- |
 | WiZ discovery | Implemented, manual | The **Discover Lights** button sends `getSystemConfig` to UDP broadcast `255.255.255.255:38899`. |
-| Discovery at app launch | Implemented, once | Each app launch starts one discovery run; after it finishes, manual discovery remains available from Settings. |
+| Discovery at app launch | Implemented, once | Each app launch starts one discovery run; after it finishes, manual discovery remains available from the menu bar. |
 | Discovery retries | Implemented, configurable | It defaults to 3 broadcasts and a 500 ms response window per attempt. Settings validates 1–10 attempts and 100–5,000 ms. |
 | Stable light identity | Implemented | It normalizes the MAC address and uses it as the stable identity. A new reply updates the saved IP if DHCP changed it. |
 | Discovery merge | Implemented | Known MACs retain their name, enabled state, and brightness mapping. New lamps are added disabled, with the default 40–80% monitor range and 1–100% light range. |
