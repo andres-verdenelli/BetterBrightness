@@ -90,349 +90,267 @@ struct SettingsView: View {
     @State private var discoveryResponseWindowText: String
     @State private var discoveryAttemptCountText: String
     @State private var lights: [LightDraft]
+    @State private var selectedLightID: UUID?
+    @State private var showsAdvanced = false
     @State private var errorMessage = ""
     @State private var showsError = false
     @State private var lightPendingDeletion: LightDraft?
     @State private var showsDeleteConfirmation = false
-    @State private var isDiscovering = false
-    @State private var discoveryAttempt = 0
-    @State private var discoveryTotalAttempts = 0
-    @State private var discoveryResultText: String?
-    @State private var showsMonitorHelp = false
-    @State private var showsResponseWindowHelp = false
-    @State private var showsAttemptCountHelp = false
-    @FocusState private var isDisplayIDFocused: Bool
-    @FocusState private var isResponseWindowFocused: Bool
-    @FocusState private var isAttemptCountFocused: Bool
+    @State private var renamingLightID: UUID?
+    @State private var renameText = ""
+    @FocusState private var renameFocus: UUID?
+    @FocusState private var advancedField: AdvancedField?
 
-    private let monitorHelpText =
-        "Use the displayID shown in BetterDisplay brightness notifications."
-    private let responseWindowHelpText =
-        "How long BetterBrightness listens for replies after each discovery " +
-        "broadcast. The default is 500 ms. A value between 500 and 1,000 ms " +
-        "is recommended; shorter windows can miss slower lights, while longer " +
-        "windows make discovery take more time."
-    private let attemptCountHelpText =
-        "How many discovery broadcasts BetterBrightness sends. The default is " +
-        "3 attempts, and 3–5 is usually enough. More attempts improve the chance " +
-        "of hearing from every light but take longer. The maximum is 10."
+    private enum AdvancedField: Hashable {
+        case displayID, responseWindow, attempts
+    }
 
     init(configurationStore: ConfigurationStore) {
         self.configurationStore = configurationStore
-
         let configuration = configurationStore.configuration
-        _displayIDText = State(
-            initialValue: String(configuration.monitor.displayID)
-        )
+        _displayIDText = State(initialValue: String(configuration.monitor.displayID))
         _discoveryResponseWindowText = State(
-            initialValue: String(
-                configuration.discovery.responseWindowMilliseconds
-            )
+            initialValue: String(configuration.discovery.responseWindowMilliseconds)
         )
         _discoveryAttemptCountText = State(
             initialValue: String(configuration.discovery.attemptCount)
         )
-        _lights = State(
-            initialValue: configuration.lights.map {
-                LightDraft(configuration: $0)
-            }
+        _lights = State(initialValue: configuration.lights.map { LightDraft(configuration: $0) })
+        _selectedLightID = State(initialValue:
+            configuration.lights.first(where: \.isEnabled)?.id
+                ?? configuration.lights.first?.id
         )
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            lightsSection
-            monitorSection
-            discoverySettingsSection
+        NavigationSplitView {
+            List(selection: selectionBinding) {
+                Section("Lights") {
+                    ForEach(sortedLightIDs, id: \.self) { id in
+                        if let light = lights.first(where: { $0.id == id }) {
+                            sidebarRow(light)
+                                .tag(id)
+                                .onTapGesture(count: 2) { beginRename(id) }
+                                .contextMenu {
+                                    Button("Rename") { beginRename(id) }
+                                    Button("Remove Light…", role: .destructive) {
+                                        requestRemoval(light)
+                                    }
+                                    .disabled(lights.count <= 1)
+                                }
+                        }
+                    }
+                }
+            }
+            .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+        } detail: {
+            if let id = selectedLightID,
+               let index = lights.firstIndex(where: { $0.id == id }) {
+                LightDetailView(
+                    light: $lights[index],
+                    onCommit: {
+                        // A selection change has already committed the previous draft.
+                        guard selectedLightID == id else { return }
+                        saveConfiguration()
+                    }
+                )
+                .id(id)
+            } else {
+                ContentUnavailableView("Select a Light", systemImage: "lightbulb")
+            }
         }
-        .padding(24)
-        .frame(width: 700, height: 640)
-        .navigationTitle("BetterBrightness")
-        .defaultFocus($isDisplayIDFocused, false)
+        .toolbar {
+            ToolbarItemGroup {
+                Button("Add Light Manually", systemImage: "plus") {
+                    finishRename()
+                    guard saveConfiguration() else { return }
+                    let light = LightDraft()
+                    lights.append(light)
+                    selectedLightID = light.id
+                    beginRename(light.id)
+                }
+                .help("Add a light by IP address")
+
+                Button("Advanced Settings", systemImage: "gearshape") {
+                    finishRename()
+                    guard saveConfiguration() else { return }
+                    showsAdvanced = true
+                }
+                .help("Monitor and discovery settings")
+            }
+        }
         .background {
-            SettingsFocusMonitor {
-                isDisplayIDFocused = false
-                isResponseWindowFocused = false
-                isAttemptCountFocused = false
+            SettingsFocusMonitor { advancedField = nil }
+        }
+        .onReceive(configurationStore.$configuration) { configuration in
+            mergeDiscoveryChangesIntoDrafts(configuration)
+        }
+        .onChange(of: renameFocus) { previous, current in
+            if let previous, previous != current, previous == renamingLightID {
+                finishRename()
+            }
+        }
+        .sheet(isPresented: $showsAdvanced) {
+            advancedSettings
+        }
+        .alert("Unable to Save", isPresented: Binding(
+            get: { showsError && !showsAdvanced },
+            set: { showsError = $0 }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(errorMessage)
+        }
+        .alert("Remove Light?", isPresented: $showsDeleteConfirmation,
+               presenting: lightPendingDeletion) { light in
+            Button("Remove", role: .destructive) { removeLight(light.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { light in
+            Text("\(light.displayName) will be removed from BetterBrightness.")
+        }
+    }
+
+    private var selectionBinding: Binding<UUID?> {
+        Binding(get: { selectedLightID }, set: { id in
+            finishRename()
+            guard id != selectedLightID, saveConfiguration() else { return }
+            selectedLightID = id
+        })
+    }
+
+    private func sidebarRow(_ light: LightDraft) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: light.isIPAddressVerified ? "lightbulb" : "exclamationmark.triangle")
+                .foregroundStyle(light.isIPAddressVerified ? Color.secondary : Color.orange)
+                .padding(.top, 2)
+            VStack(alignment: .leading, spacing: 4) {
+                if renamingLightID == light.id {
+                    TextField("Light name", text: $renameText)
+                        .textFieldStyle(.plain)
+                        .foregroundStyle(Color(nsColor: .textColor))
+                        .tint(Color(nsColor: .controlAccentColor))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .background(
+                            Color(nsColor: .textBackgroundColor),
+                            in: RoundedRectangle(cornerRadius: 4)
+                        )
+                        .focused($renameFocus, equals: light.id)
+                        .onSubmit(finishRename)
+                        .onExitCommand(perform: cancelRename)
+                        .onAppear { renameFocus = light.id }
+                } else {
+                    Text(light.displayName)
+                        .lineLimit(1)
+                        .help(light.displayName)
+                }
+                Text(light.isIPAddressVerified
+                     ? (light.ip.isEmpty ? "Enter an IP address" : light.ip)
+                     : "Waiting for rediscovery")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 5)
+    }
+
+    private var sortedLightIDs: [UUID] {
+        lights.sorted { first, second in
+            if first.isEnabled != second.isEnabled { return first.isEnabled }
+            let comparison = first.displayName.localizedStandardCompare(second.displayName)
+            if comparison != .orderedSame { return comparison == .orderedAscending }
+            return first.id.uuidString < second.id.uuidString
+        }.map(\.id)
+    }
+
+    private func beginRename(_ id: UUID) {
+        guard renamingLightID != id,
+              let light = lights.first(where: { $0.id == id }) else { return }
+        finishRename()
+        if selectedLightID != id {
+            guard saveConfiguration() else { return }
+            selectedLightID = id
+        }
+        renameText = light.name
+        renamingLightID = id
+    }
+
+    private func finishRename() {
+        guard let id = renamingLightID,
+              let index = lights.firstIndex(where: { $0.id == id }) else { return }
+        lights[index].name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        renamingLightID = nil
+        renameFocus = nil
+        // A manually added light can be named before its IP address is entered.
+        if !lights[index].ip.isEmpty { saveConfiguration() }
+    }
+
+    private func cancelRename() {
+        renamingLightID = nil
+        renameFocus = nil
+    }
+
+    private var advancedSettings: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    TextField("BetterDisplay display ID", text: displayIDBinding)
+                        .focused($advancedField, equals: .displayID)
+                        .onSubmit(saveDisplayIDIfNeeded)
+                } header: {
+                    Text("Monitor")
+                } footer: {
+                    Text("Use the displayID shown in BetterDisplay brightness notifications.")
+                }
+                Section {
+                    LabeledContent("Response window") {
+                        HStack(spacing: 4) {
+                            TextField("Response window", text: discoveryResponseWindowBinding)
+                                .labelsHidden()
+                                .frame(width: 65)
+                                .multilineTextAlignment(.trailing)
+                                .focused($advancedField, equals: .responseWindow)
+                                .onSubmit(saveDiscoverySettingsIfNeeded)
+                            Text("ms").foregroundStyle(.secondary)
+                        }
+                    }
+                    TextField("Attempts", text: discoveryAttemptCountBinding)
+                        .focused($advancedField, equals: .attempts)
+                        .onSubmit(saveDiscoverySettingsIfNeeded)
+                } header: {
+                    Text("Discovery")
+                } footer: {
+                    Text("Default: 500 ms and 3 attempts. Longer windows and more attempts make discovery take longer. Discover lights from the menu bar.")
+                }
+            }
+            .formStyle(.grouped)
+            .monospacedDigit()
+            HStack {
+                Spacer()
+                Button("Done") {
+                    guard saveConfiguration() else { return }
+                    showsAdvanced = false
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+            .padding()
+        }
+        .frame(width: 460, height: 360)
+        .background {
+            SettingsFocusMonitor { advancedField = nil }
+        }
+        .onChange(of: advancedField) { previous, _ in
+            if previous == .displayID { saveDisplayIDIfNeeded() }
+            if previous == .responseWindow || previous == .attempts {
+                saveDiscoverySettingsIfNeeded()
             }
         }
         .alert("Unable to Save", isPresented: $showsError) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(errorMessage)
-        }
-        .alert(
-            "Remove Light?",
-            isPresented: $showsDeleteConfirmation,
-            presenting: lightPendingDeletion
-        ) { light in
-            Button("Remove", role: .destructive) {
-                removeLight(light.id)
-                lightPendingDeletion = nil
-            }
-            Button("Cancel", role: .cancel) {
-                lightPendingDeletion = nil
-            }
-        } message: { light in
-            Text(
-                "\(light.displayName) at "
-                    + "\(light.ip.isEmpty ? "this address" : light.ip) "
-                    + "will be removed from BetterBrightness."
-            )
-        }
-    }
-
-    private var monitorSection: some View {
-        GroupBox {
-            HStack(spacing: 12) {
-                HStack(spacing: 6) {
-                    Text("BetterDisplay display ID")
-
-                    Button {
-                        showsMonitorHelp.toggle()
-                    } label: {
-                        Image(systemName: "questionmark.circle")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help(monitorHelpText)
-                    .popover(isPresented: $showsMonitorHelp, arrowEdge: .bottom) {
-                        Text(monitorHelpText)
-                            .font(.callout)
-                            .padding(12)
-                            .frame(width: 280, alignment: .leading)
-                    }
-                }
-
-                Spacer()
-
-                TextField("Display ID", text: displayIDBinding)
-                    .labelsHidden()
-                    .textFieldStyle(.roundedBorder)
-                    .multilineTextAlignment(.trailing)
-                    .monospacedDigit()
-                    .frame(width: 72)
-                    .focused($isDisplayIDFocused)
-                    .onSubmit(saveDisplayIDIfNeeded)
-                    .onChange(of: isDisplayIDFocused) { wasFocused, isFocused in
-                        if wasFocused && !isFocused {
-                            saveDisplayIDIfNeeded()
-                        }
-                    }
-            }
-            .padding(4)
-        } label: {
-            Text("Monitor")
-                .font(.headline)
-        }
-    }
-
-    private var lightsSection: some View {
-        GroupBox {
-            VStack(spacing: 12) {
-                discoveryControls
-
-                Divider()
-
-                List {
-                    ForEach(sortedLightIDs, id: \.self) { lightID in
-                        if let lightIndex = lights.firstIndex(where: {
-                            $0.id == lightID
-                        }) {
-                            LightSettingsRow(
-                                light: $lights[lightIndex],
-                                canDelete: lights.count > 1,
-                                onCommit: {
-                                    saveConfiguration()
-                                }
-                            ) {
-                                lightPendingDeletion = lights[lightIndex]
-                                showsDeleteConfirmation = true
-                            }
-                        }
-                    }
-                }
-                .listStyle(.inset)
-                .scrollContentBackground(.hidden)
-                .scrollIndicators(.visible)
-
-            }
-            .padding(4)
-        } label: {
-            HStack {
-                Text("WiZ Lights")
-                    .font(.headline)
-
-                Spacer()
-
-                Text("\(lights.count) configured")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxHeight: .infinity)
-    }
-
-    private var sortedLightIDs: [UUID] {
-        lights.sorted { firstLight, secondLight in
-            if firstLight.isEnabled != secondLight.isEnabled {
-                return firstLight.isEnabled
-            }
-
-            let nameComparison = firstLight.displayName.localizedStandardCompare(
-                secondLight.displayName
-            )
-            if nameComparison != .orderedSame {
-                return nameComparison == .orderedAscending
-            }
-
-            return firstLight.id.uuidString < secondLight.id.uuidString
-        }
-        .map(\.id)
-    }
-
-    private var discoveryControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
-                Button {
-                    discoverLights()
-                } label: {
-                    Label(
-                        "Discover Lights",
-                        systemImage: "dot.radiowaves.left.and.right"
-                    )
-                }
-                .disabled(isDiscovering)
-
-                if isDiscovering {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text(
-                        "Attempt \(discoveryAttempt) of "
-                            + "\(discoveryTotalAttempts)"
-                    )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                }
-
-                Spacer()
-
-                Button {
-                    lights.append(LightDraft())
-                } label: {
-                    Label("Add Manually", systemImage: "plus")
-                }
-            }
-
-            if let discoveryResultText {
-                Text(discoveryResultText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var discoverySettingsSection: some View {
-        GroupBox {
-            VStack(spacing: 12) {
-                HStack(spacing: 12) {
-                    HStack(spacing: 6) {
-                        Text("Response window")
-
-                        Button {
-                            showsResponseWindowHelp.toggle()
-                        } label: {
-                            Image(systemName: "questionmark.circle")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help(responseWindowHelpText)
-                        .popover(
-                            isPresented: $showsResponseWindowHelp,
-                            arrowEdge: .bottom
-                        ) {
-                            Text(responseWindowHelpText)
-                                .font(.callout)
-                                .padding(12)
-                                .frame(width: 320, alignment: .leading)
-                        }
-                    }
-
-                    Spacer()
-
-                    TextField(
-                        "Milliseconds",
-                        text: discoveryResponseWindowBinding
-                    )
-                    .labelsHidden()
-                    .textFieldStyle(.roundedBorder)
-                    .multilineTextAlignment(.trailing)
-                    .monospacedDigit()
-                    .frame(width: 80)
-                    .focused($isResponseWindowFocused)
-                    .onSubmit(saveDiscoverySettingsIfNeeded)
-                    .onChange(of: isResponseWindowFocused) {
-                        wasFocused,
-                        isFocused in
-                        if wasFocused && !isFocused {
-                            saveDiscoverySettingsIfNeeded()
-                        }
-                    }
-
-                    Text("ms")
-                        .foregroundStyle(.secondary)
-                        .frame(width: 24, alignment: .leading)
-                }
-
-                HStack(spacing: 12) {
-                    HStack(spacing: 6) {
-                        Text("Attempts")
-
-                        Button {
-                            showsAttemptCountHelp.toggle()
-                        } label: {
-                            Image(systemName: "questionmark.circle")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help(attemptCountHelpText)
-                        .popover(
-                            isPresented: $showsAttemptCountHelp,
-                            arrowEdge: .bottom
-                        ) {
-                            Text(attemptCountHelpText)
-                                .font(.callout)
-                                .padding(12)
-                                .frame(width: 320, alignment: .leading)
-                        }
-                    }
-
-                    Spacer()
-
-                    TextField("Attempts", text: discoveryAttemptCountBinding)
-                        .labelsHidden()
-                        .textFieldStyle(.roundedBorder)
-                        .multilineTextAlignment(.trailing)
-                        .monospacedDigit()
-                        .frame(width: 80)
-                        .focused($isAttemptCountFocused)
-                        .onSubmit(saveDiscoverySettingsIfNeeded)
-                        .onChange(of: isAttemptCountFocused) {
-                            wasFocused,
-                            isFocused in
-                            if wasFocused && !isFocused {
-                                saveDiscoverySettingsIfNeeded()
-                            }
-                        }
-
-                    Color.clear
-                        .frame(width: 24, height: 1)
-                }
-            }
-            .padding(4)
-        } label: {
-            Text("Discovery")
-                .font(.headline)
         }
     }
 
@@ -569,97 +487,36 @@ struct SettingsView: View {
         saveConfiguration()
     }
 
-    private func discoverLights() {
-        guard saveConfiguration() else { return }
-
-        let discoveryConfiguration = configurationStore.configuration.discovery
-        isDiscovering = true
-        discoveryAttempt = 0
-        discoveryTotalAttempts = discoveryConfiguration.attemptCount
-        discoveryResultText = nil
-
-        WiZDiscoveryService.discover(
-            configuration: discoveryConfiguration
-        ) { attempt in
-            discoveryAttempt = attempt
-        } completion: { result in
-            isDiscovering = false
-
-            switch result {
-            case .success(let discoveredLights):
-                do {
-                    let summary = try configurationStore.applyDiscoveryResults(
-                        discoveredLights
-                    )
-                    mergeDiscoveryChangesIntoDrafts()
-                    discoveryResultText = discoverySummaryText(summary)
-                } catch {
-                    errorMessage = error.localizedDescription
-                    showsError = true
-                }
-
-            case .failure(let error):
-                errorMessage = error.localizedDescription
-                showsError = true
-            }
-        }
-    }
-
-    private func mergeDiscoveryChangesIntoDrafts() {
-        for savedLight in configurationStore.configuration.lights {
-            if let index = lights.firstIndex(where: { $0.id == savedLight.id }) {
-                lights[index].macAddress = savedLight.macAddress
-                lights[index].ip = savedLight.ip
-                lights[index].isIPAddressVerified =
-                    savedLight.isIPAddressVerified
-                lights[index].deviceInfo = savedLight.deviceInfo
+    private func mergeDiscoveryChangesIntoDrafts(_ configuration: AppConfiguration) {
+        for saved in configuration.lights {
+            if let index = lights.firstIndex(where: { $0.id == saved.id }) {
+                // Discovery owns identity and address; retain in-progress user edits.
+                lights[index].macAddress = saved.macAddress
+                lights[index].ip = saved.ip
+                lights[index].isIPAddressVerified = saved.isIPAddressVerified
+                lights[index].deviceInfo = saved.deviceInfo
             } else {
-                lights.append(LightDraft(configuration: savedLight))
+                lights.append(LightDraft(configuration: saved))
             }
         }
     }
 
-    private func discoverySummaryText(
-        _ summary: DiscoveryMergeSummary
-    ) -> String {
-        guard summary.foundLights > 0 else {
-            return "No WiZ lights were found."
-        }
-
-        var details = [
-            "\(summary.foundLights) "
-                + "\(summary.foundLights == 1 ? "light" : "lights") found"
-        ]
-        if summary.newLights > 0 {
-            details.append("\(summary.newLights) new")
-        }
-        if summary.updatedIPs > 0 {
-            details.append(
-                "\(summary.updatedIPs) IP "
-                    + "\(summary.updatedIPs == 1 ? "address" : "addresses") "
-                    + "updated"
-            )
-        }
-        if summary.identifiedExistingLights > 0 {
-            details.append(
-                "\(summary.identifiedExistingLights) existing "
-                    + "\(summary.identifiedExistingLights == 1 ? "light" : "lights") "
-                    + "identified"
-            )
-        }
-        if summary.invalidatedIPs > 0 {
-            details.append(
-                "\(summary.invalidatedIPs) waiting for rediscovery"
-            )
-        }
-
-        return details.joined(separator: " · ")
+    private func requestRemoval(_ light: LightDraft) {
+        cancelRename()
+        lightPendingDeletion = light
+        showsDeleteConfirmation = true
     }
 
     private func removeLight(_ id: UUID) {
         guard lights.count > 1 else { return }
-        lights.removeAll { $0.id == id }
-        saveConfiguration()
+        guard let removedIndex = lights.firstIndex(where: { $0.id == id }) else { return }
+        let removed = lights.remove(at: removedIndex)
+        guard saveConfiguration() else {
+            lights.insert(removed, at: removedIndex)
+            return
+        }
+        if selectedLightID == id { selectedLightID = sortedLightIDs.first }
+        lightPendingDeletion = nil
     }
 }
 
@@ -775,230 +632,136 @@ private struct SettingsFocusMonitor: NSViewRepresentable {
     }
 }
 
-private struct LightSettingsRow: View {
+private struct LightDetailView: View {
     @Binding var light: LightDraft
-    let canDelete: Bool
     let onCommit: () -> Void
-    let onDelete: () -> Void
+    @FocusState private var isIPFocused: Bool
 
-    @State private var isExpanded = false
-    @State private var showsBrightnessMappingHelp = false
-    @FocusState private var focusedField: Field?
+    private let syncHelp = "When on, this light follows brightness changes from your selected BetterDisplay monitor. Turn it off to stop sending brightness updates to this light."
 
-    private enum Field: Hashable {
-        case name
-        case ip
-        case monitorMin
-        case monitorMax
-        case lightMin
-        case lightMax
+    private var mappingHelp: String {
+        "Monitor chooses the brightness range that controls this light. Light chooses how dim and how bright the light can get. These controls do not change your monitor's brightness.\n\n"
+            + "With your current settings:\n"
+            + "• At \(light.monitorMin)% monitor brightness, the light is set to \(light.lightMinPercent)%.\n"
+            + "• At \(light.monitorMax)% monitor brightness, the light is set to \(light.lightMaxPercent)%.\n\n"
+            + "Between those points, the light changes proportionally: halfway through the monitor range means halfway through the light range. Below or above the monitor range, the light stays at its chosen minimum or maximum."
     }
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
-            VStack(alignment: .leading, spacing: 16) {
-                LabeledContent("Name") {
-                    TextField("Light Name", text: $light.name)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 280)
-                        .focused($focusedField, equals: .name)
+        Form {
+            Section {
+                HStack(spacing: 12) {
+                    Text("Sync brightness")
+                    Spacer()
+                    SettingsHelpButton(title: "Sync brightness", explanation: syncHelp)
+                    Toggle("Sync brightness", isOn: $light.isEnabled)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .onChange(of: light.isEnabled) { onCommit() }
+                }
+            } footer: {
+                if !light.isIPAddressVerified {
+                    Label("No commands are sent until this light is rediscovered.",
+                          systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                }
+            }
+
+            Section {
+                rangeRow("Monitor", minimum: $light.monitorMin,
+                         maximum: $light.monitorMax, domain: 0...100)
+                rangeRow("Light", minimum: $light.lightMinPercent,
+                         maximum: $light.lightMaxPercent, domain: 1...100)
+            } header: {
+                HStack {
+                    Text("Brightness mapping")
+                    Spacer()
+                    SettingsHelpButton(title: "Brightness mapping", explanation: mappingHelp)
+                }
+            }
+
+            Section("Light") {
+                if light.macAddress == nil {
+                    TextField("IP address", text: $light.ip)
+                        .focused($isIPFocused)
                         .onSubmit(onCommit)
-                }
-
-                manualIPAddressField
-
-                Divider()
-
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(spacing: 6) {
-                        Text("Brightness Mapping")
-                            .font(.subheadline.weight(.semibold))
-
-                        Button {
-                            showsBrightnessMappingHelp.toggle()
-                        } label: {
-                            Image(systemName: "questionmark.circle")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .help(brightnessMappingHelpText)
-                        .popover(
-                            isPresented: $showsBrightnessMappingHelp,
-                            arrowEdge: .bottom
-                        ) {
-                            brightnessMappingHelp
-                        }
+                        .help("Discover lights from the menu bar to identify this light by MAC address.")
+                } else {
+                    LabeledContent("IP address", value: light.ip)
+                    if let mac = light.macAddress {
+                        LabeledContent("MAC address", value: WiZMACAddress.display(mac))
                     }
-
-                    percentageRow(
-                        "Monitor minimum",
-                        value: $light.monitorMin,
-                        field: .monitorMin
-                    )
-
-                    percentageRow(
-                        "Monitor maximum",
-                        value: $light.monitorMax,
-                        field: .monitorMax
-                    )
-
-                    Divider()
-
-                    percentageRow(
-                        "Light minimum",
-                        value: $light.lightMinPercent,
-                        field: .lightMin
-                    )
-
-                    percentageRow(
-                        "Light maximum",
-                        value: $light.lightMaxPercent,
-                        field: .lightMax
-                    )
-
                 }
+            }
+        }
+        .formStyle(.grouped)
+        .navigationTitle(light.displayName)
+        .onChange(of: isIPFocused) { previous, current in
+            if previous && !current { onCommit() }
+        }
+    }
+
+    private func rangeRow(
+        _ title: String, minimum: Binding<Int>, maximum: Binding<Int>,
+        domain: ClosedRange<Int>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.subheadline.weight(.medium))
+            HStack(spacing: 12) {
+                Text("\(minimum.wrappedValue)%")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 42, alignment: .leading)
+                    .accessibilityLabel("\(title) minimum: \(minimum.wrappedValue) percent")
+                BrightnessRangeControl(minimum: minimum, maximum: maximum,
+                                       domain: domain, title: title, onCommit: onCommit)
+                    .frame(height: 28)
+                Text("\(maximum.wrappedValue)%")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 42, alignment: .trailing)
+                    .accessibilityLabel("\(title) maximum: \(maximum.wrappedValue) percent")
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct SettingsHelpButton: View {
+    let title: String
+    let explanation: String
+    @State private var isPresented = false
+    @State private var isPinned = false
+
+    var body: some View {
+        Button {
+            if isPinned {
+                isPinned = false
+                isPresented = false
+            } else {
+                isPinned = true
+                isPresented = true
             }
         } label: {
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(light.displayName)
-                        .lineLimit(1)
-
-                    if !light.isIPAddressVerified {
-                        Label(
-                            "Waiting for rediscovery",
-                            systemImage: "exclamationmark.triangle.fill"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                    }
-                }
-
-                Spacer(minLength: 16)
-
-                Toggle("Send brightness commands", isOn: $light.isEnabled)
-                    .toggleStyle(.switch)
-                    .font(.caption)
-                    .fixedSize()
-                    .help(
-                        light.isIPAddressVerified
-                            ? "When on, this light receives brightness updates from BetterBrightness."
-                            : "No commands are sent until this light is rediscovered."
-                    )
-                    .onChange(of: light.isEnabled) {
-                        onCommit()
-                    }
-
-                Button(role: .destructive, action: onDelete) {
-                    Image(systemName: "trash")
-                }
-                .buttonStyle(.borderless)
-                .disabled(!canDelete)
-                .help("Remove light")
-            }
-        }
-        .padding(.vertical, 8)
-        .onChange(of: focusedField) { previousField, newField in
-            if previousField != nil && previousField != newField {
-                onCommit()
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var manualIPAddressField: some View {
-        if light.macAddress == nil {
-            VStack(alignment: .leading, spacing: 6) {
-                LabeledContent("IP Address") {
-                    TextField("192.168.1.2", text: $light.ip)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(minWidth: 280)
-                        .focused($focusedField, equals: .ip)
-                        .onSubmit(onCommit)
-                }
-
-                Text("Run discovery to identify this light by MAC address.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private var brightnessMappingHelpText: String {
-        "Choose how the monitor brightness range maps to the light "
-            + "brightness range. Values between the limits scale "
-            + "proportionally. "
-            + brightnessMappingExample
-    }
-
-    private var brightnessMappingHelp: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Brightness Mapping")
-                .font(.headline)
-
-            Text(
-                "Choose how the monitor brightness range maps to the light "
-                    + "brightness range. Values between the limits scale "
-                    + "proportionally."
-            )
-
-            Text("Example")
-                .font(.subheadline.weight(.semibold))
-
-            Text(brightnessMappingExample)
+            Image(systemName: "questionmark.circle")
                 .foregroundStyle(.secondary)
         }
-        .font(.callout)
-        .padding(14)
-        .frame(width: 360, alignment: .leading)
-    }
-
-    private var brightnessMappingExample: String {
-        "With the monitor set to \(light.monitorMin)%–\(light.monitorMax)% "
-            + "and the light set to "
-            + "\(light.lightMinPercent)%–\(light.lightMaxPercent)%, monitor "
-            + "brightness at \(light.monitorMin)% sets the light to "
-            + "\(light.lightMinPercent)%, \(monitorMidpoint)% sets it to "
-            + "\(lightMidpoint)%, and \(light.monitorMax)% sets it to "
-            + "\(light.lightMaxPercent)%. Values outside the monitor range "
-            + "stay at the nearest light limit."
-    }
-
-    private var monitorMidpoint: String {
-        midpoint(between: light.monitorMin, and: light.monitorMax)
-    }
-
-    private var lightMidpoint: String {
-        midpoint(
-            between: light.lightMinPercent,
-            and: light.lightMaxPercent
-        )
-    }
-
-    private func midpoint(between minimum: Int, and maximum: Int) -> String {
-        let sum = minimum + maximum
-        return sum.isMultiple(of: 2) ? "\(sum / 2)" : "\(sum / 2).5"
-    }
-
-    private func percentageRow(
-        _ title: String,
-        value: Binding<Int>,
-        field: Field
-    ) -> some View {
-        LabeledContent(title) {
-            HStack(spacing: 4) {
-                TextField(title, value: value, format: .number)
-                    .labelsHidden()
-                    .textFieldStyle(.roundedBorder)
-                    .multilineTextAlignment(.trailing)
-                    .monospacedDigit()
-                    .frame(width: 56)
-                    .focused($focusedField, equals: field)
-                    .onSubmit(onCommit)
-
-                Text("%")
-                    .foregroundStyle(.secondary)
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title) help")
+        .onHover { isHovering in
+            if isHovering { isPresented = true }
+            else if !isPinned { isPresented = false }
+        }
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(title).font(.headline)
+                Text(explanation).font(.callout)
             }
+            .padding(14)
+            .frame(width: 330, alignment: .leading)
+        }
+        .onChange(of: isPresented) { _, shown in
+            if !shown { isPinned = false }
         }
     }
 }

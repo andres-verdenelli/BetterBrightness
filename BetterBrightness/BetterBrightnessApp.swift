@@ -16,11 +16,14 @@ struct BetterBrightnessApp: App {
                     : "sun.max.fill"
             )
         }
+        .menuBarExtraStyle(.window)
 
         Settings {
             SettingsView(configurationStore: controller.configurationStore)
+                .frame(minWidth: 740, minHeight: 560)
         }
-        .windowResizability(.contentSize)
+        .defaultSize(width: 820, height: 640)
+        .windowResizability(.contentMinSize)
     }
 }
 
@@ -33,22 +36,66 @@ private struct MenuBarContent: View {
     }
 
     var body: some View {
-        Button(
-            controller.isPaused ? "Resume" : "Pause",
-            systemImage: controller.isPaused ? "play.fill" : "pause.fill"
-        ) {
-            controller.togglePause()
+        VStack(alignment: .leading, spacing: 12) {
+            Button(
+                controller.isPaused ? "Resume" : "Pause",
+                systemImage: controller.isPaused ? "play.fill" : "pause.fill"
+            ) {
+                controller.togglePause()
+            }
+
+            Divider()
+
+            DiscoveryMenuContent(discovery: controller.discoveryController)
+
+            Divider()
+
+            Button("Settings…", systemImage: "gearshape") {
+                NSApplication.shared.activate(ignoringOtherApps: true)
+                openSettings()
+            }
+
+            Button("Quit BetterBrightness", systemImage: "power") {
+                NSApplication.shared.terminate(nil)
+            }
         }
+        .buttonStyle(.borderless)
+        .padding(14)
+        .frame(width: 290, alignment: .leading)
+    }
+}
 
-        Button("Settings", systemImage: "gearshape") {
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            openSettings()
+struct DiscoveryMenuContent: View {
+    @ObservedObject var discovery: DiscoveryController
+
+    var body: some View {
+        Button("Discover Lights", systemImage: "dot.radiowaves.left.and.right") {
+            discovery.discoverLights()
         }
+        .disabled(discovery.isDiscovering)
+        .buttonStyle(.bordered)
 
-        Divider()
-
-        Button("Quit BetterBrightness", systemImage: "power") {
-            NSApplication.shared.terminate(nil)
+        if discovery.isDiscovering {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(discovery.attempt == 0
+                     ? "Starting discovery…"
+                     : "Attempt \(discovery.attempt) of \(discovery.totalAttempts)")
+            }
+        } else if let errorMessage = discovery.errorMessage {
+            Text("Discovery failed")
+            Text(errorMessage)
+        } else if let summary = discovery.lastSummary {
+            Text(summary.foundLights == 0
+                 ? "No WiZ lights found"
+                 : "\(summary.foundLights) \(summary.foundLights == 1 ? "light" : "lights") found")
+            Text("\(summary.updatedIPs) IP \(summary.updatedIPs == 1 ? "address" : "addresses") updated")
+            if summary.newLights > 0 {
+                Text("\(summary.newLights) new · Enable in Settings")
+            }
+            if summary.invalidatedIPs > 0 {
+                Text("\(summary.invalidatedIPs) waiting for rediscovery")
+            }
         }
     }
 }

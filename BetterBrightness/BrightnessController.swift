@@ -289,6 +289,7 @@ final class BrightnessController: ObservableObject {
     @Published private(set) var statusText = "Starting…"
 
     let configurationStore: ConfigurationStore
+    let discoveryController: DiscoveryController
 
     private let notificationName = Notification.Name(
         "pro.betterdisplay.BetterDisplay.osd"
@@ -297,16 +298,17 @@ final class BrightnessController: ObservableObject {
     private var udpConnections: [UUID: NWConnection] = [:]
     private var lastMonitorBrightness: Double?
 
-    init() {
-        self.configurationStore = ConfigurationStore()
-        startListening()
-        discoverLightsAtLaunch()
+    convenience init() {
+        self.init(configurationStore: ConfigurationStore())
     }
 
     init(configurationStore: ConfigurationStore) {
         self.configurationStore = configurationStore
+        self.discoveryController = DiscoveryController(
+            configurationStore: configurationStore
+        )
         startListening()
-        discoverLightsAtLaunch()
+        discoveryController.discoverLights()
     }
 
     private var configuration: AppConfiguration {
@@ -353,41 +355,6 @@ final class BrightnessController: ObservableObject {
 
         statusText = "Active · waiting for changes"
         print("Listening for BetterDisplay monitor \(configuration.monitor.displayID)")
-    }
-
-    private func discoverLightsAtLaunch() {
-        print("Starting WiZ discovery at launch")
-
-        let discoveryConfiguration = configuration.discovery
-
-        WiZDiscoveryService.discover(
-            configuration: discoveryConfiguration
-        ) { attempt in
-            print(
-                "WiZ discovery attempt \(attempt) of " +
-                    "\(discoveryConfiguration.attemptCount)"
-            )
-        } completion: { [weak self] result in
-            guard let self else { return }
-
-            switch result {
-            case .success(let discoveredLights):
-                do {
-                    let summary = try self.configurationStore.applyDiscoveryResults(
-                        discoveredLights
-                    )
-                    print(
-                        "WiZ launch discovery found \(summary.foundLights) lights " +
-                        "(\(summary.newLights) new, \(summary.updatedIPs) IP addresses updated)"
-                    )
-                } catch {
-                    print("Could not save WiZ launch discovery results: \(error)")
-                }
-
-            case .failure(let error):
-                print("WiZ launch discovery failed: \(error)")
-            }
-        }
     }
 
     private func handleNotification(_ notification: Notification) {
