@@ -23,6 +23,9 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
+      - name: Run discovery and range-control checks
+        run: bash Tests/run.sh
+
       - name: Build BetterBrightness
         run: |
           xcodebuild \

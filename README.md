@@ -17,7 +17,7 @@
 
 BetterBrightness keeps compatible WiZ lights visually aligned with a selected monitor. It listens for local brightness notifications from BetterDisplay, maps the monitor range to a configurable range for each light, and sends WiZ commands directly over UDP.
 
-The app is intentionally small and native: the menu bar contains only Pause or Resume, Settings, and Quit. Device discovery, mapping controls, and advanced discovery options are available progressively in Settings.
+The app is intentionally small and native. The menu bar panel contains Pause or Resume, Discover Lights, its progress and latest results, Settings, and Quit. The panel stays open during discovery. Settings uses a light list and a dedicated brightness-mapping editor, with monitor and discovery options under Advanced Settings.
 
 ## Features
 
@@ -70,10 +70,10 @@ For regular local installation, create a signed build in Xcode and move `BetterB
 
 1. Launch BetterBrightness from the menu bar.
 2. Open **Settings**.
-3. Confirm the BetterDisplay display ID for the monitor you want to follow.
-4. Select **Discover Lights** while the Mac and lights are on the same network.
-5. Rename the discovered lights and enable **Send brightness commands** for each light you want to control.
-6. Expand a light to configure its monitor and light brightness ranges.
+3. Open **Advanced Settings** with the gear button and confirm the BetterDisplay display ID for the monitor you want to follow.
+4. Select **Discover Lights** from the menu bar while the Mac and lights are on the same network. Its results show the lights found and IP addresses updated.
+5. Select each discovered light in Settings and enable **Sync brightness** for each light you want to control. Double-click its name in the sidebar, or right-click and choose **Rename**, to rename it. Right-click also provides **Remove Light**.
+6. Drag the two handles on the Monitor or Light slider to choose its range. The minimum and maximum percentages appear at the left and right; changes save when you finish dragging. Hover over or click **?** for an explanation. The gear button opens Advanced Settings, including the BetterDisplay display ID.
 
 Newly discovered lights remain disabled until you explicitly enable them.
 
@@ -115,7 +115,10 @@ macOS will ask for Local Network access because discovery and control cannot wor
 | `BrightnessController.swift` | BetterDisplay listener, brightness mapping, and WiZ command delivery |
 | `ConfigurationStore.swift` | Persistent settings, validation, and discovery reconciliation |
 | `WiZDiscoveryService.swift` | UDP broadcast discovery and response parsing |
+| `DiscoveryController.swift` | Shared discovery progress, results, and errors, independent of Settings |
 | `SettingsView.swift` | Native settings interface and per-light controls |
+| `LightDraft.swift` | Editable light settings that preserve unsaved manual IP changes during discovery |
+| `BrightnessRangeControl.swift` | A shared range track with two native AppKit thumbs, keyboard and accessibility support |
 
 See [ROADMAP.md](ROADMAP.md) for implementation notes and possible future improvements.
 
@@ -134,6 +137,8 @@ The project is validated with a Release build using the full Xcode toolchain:
 ```
 
 Network discovery and UDP delivery still require testing on real Wi-Fi hardware; compilation alone cannot verify device responses.
+
+Run the discovery and range-control regression checks with `bash Tests/run.sh`. They use simulated discovery and a separate preferences domain; no real lights are controlled. See `Design/UI-REVIEW.md` for the selected design and validation evidence.
 
 ## Contributing
 
