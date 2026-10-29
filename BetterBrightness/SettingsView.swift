@@ -288,7 +288,7 @@ struct SettingsView: View {
         do {
             try configurationStore.save(
                 displayID: displayID,
-                lights: lights.map(\.configuration),
+                lights: LightDraft.configurationsForSaving(lights),
                 discovery: discoveryConfiguration
             )
             return true
@@ -406,13 +406,7 @@ struct SettingsView: View {
     }
 
     private func mergeDiscoveryChangesIntoDrafts(_ configuration: AppConfiguration) {
-        for saved in configuration.lights {
-            if let index = lights.firstIndex(where: { $0.id == saved.id }) {
-                lights[index].mergeDiscoveryChanges(saved)
-            } else {
-                lights.append(LightDraft(configuration: saved))
-            }
-        }
+        LightDraft.mergeDiscoveryChanges(configuration.lights, into: &lights)
     }
 
     private func requestRemoval(_ light: LightDraft) {

@@ -13,6 +13,7 @@ struct LightDraft: Identifiable {
     var lightMaxPercent: Int
     var deviceInfo: WiZDeviceInfo?
     private var savedIPAddress: String
+    private var discoveredDestination: LightConfiguration?
 
     init(
         id: UUID = UUID(),
@@ -60,27 +61,79 @@ struct LightDraft: Identifiable {
         deviceInfo = configuration.deviceInfo
     }
 
+    private var normalizedIPAddress: String {
+        ip.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var hasManualAddressEdit: Bool {
+        macAddress == nil && normalizedIPAddress != savedIPAddress
+    }
+
     mutating func mergeDiscoveryChanges(_ saved: LightConfiguration) {
-        let hasManualAddressEdit = macAddress == nil &&
-            ip.trimmingCharacters(in: .whitespacesAndNewlines) != savedIPAddress
+        let preservesManualAddress = hasManualAddressEdit &&
+            normalizedIPAddress != saved.ip.trimmingCharacters(in: .whitespacesAndNewlines)
         savedIPAddress = saved.ip.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Do not associate an old address's discovered identity with a new manual address.
         // Advance the saved baseline even for our own saves, so later replies can merge.
-        guard !hasManualAddressEdit else { return }
+        guard !preservesManualAddress else { return }
         macAddress = saved.macAddress
         ip = saved.ip
         isIPAddressVerified = saved.isIPAddressVerified
         deviceInfo = saved.deviceInfo
     }
 
+    static func mergeDiscoveryChanges(_ savedLights: [LightConfiguration], into drafts: inout [LightDraft]) {
+        // Rebuild pending identities from the latest snapshot, so an address that
+        // becomes unverified or changes again cannot leave stale identity behind.
+        for index in drafts.indices {
+            drafts[index].discoveredDestination = nil
+        }
+        for saved in savedLights {
+            if let index = drafts.firstIndex(where: { $0.id == saved.id }) {
+                drafts[index].mergeDiscoveryChanges(saved)
+            }
+        }
+        for saved in savedLights where !drafts.contains(where: { $0.id == saved.id }) {
+            let matchingDrafts = drafts.indices.filter {
+                drafts[$0].hasManualAddressEdit && drafts[$0].normalizedIPAddress == saved.ip
+            }
+            if saved.isIPAddressVerified, saved.macAddress != nil,
+               matchingDrafts.count == 1, let index = matchingDrafts.first {
+                // Keep the manual row's ID and edits. Its next save adopts the
+                // identity found at the edited destination instead of duplicating it.
+                drafts[index].discoveredDestination = saved
+            } else {
+                drafts.append(LightDraft(configuration: saved))
+            }
+        }
+    }
+
+    static func configurationsForSaving(_ drafts: [LightDraft]) -> [LightConfiguration] {
+        var configurations = drafts.map(\.configuration)
+        for draft in drafts {
+            // If the user edits away from a reconciled destination before saving,
+            // retain that discovered light separately instead of silently dropping it.
+            if let destination = draft.discoveredDestination,
+               !configurations.contains(where: {
+                   $0.id == destination.id || $0.macAddress == destination.macAddress
+               }) {
+                configurations.append(destination)
+            }
+        }
+        return configurations
+    }
+
     var configuration: LightConfiguration {
-        LightConfiguration(
+        let destination = discoveredDestination.flatMap {
+            macAddress == nil && $0.ip == normalizedIPAddress ? $0 : nil
+        }
+        return LightConfiguration(
             id: id,
             name: name,
-            macAddress: macAddress,
+            macAddress: destination?.macAddress ?? macAddress,
             ip: ip,
-            isIPAddressVerified: isIPAddressVerified,
+            isIPAddressVerified: destination?.isIPAddressVerified ?? isIPAddressVerified,
             isEnabled: isEnabled,
             port: 38899,
             mapping: BrightnessMapping(
@@ -89,7 +142,7 @@ struct LightDraft: Identifiable {
                 lightMinPercent: Double(lightMinPercent),
                 lightMaxPercent: Double(lightMaxPercent)
             ),
-            deviceInfo: deviceInfo
+            deviceInfo: destination?.deviceInfo ?? deviceInfo
         )
     }
 
