@@ -21,3 +21,9 @@ swiftc -sdk "$test_sdk" -parse-as-library \
   "$test_root/Tests/RangeControlTests.swift" \
   -o "$test_output/RangeControlTests"
 "$test_output/RangeControlTests"
+swiftc -sdk "$test_sdk" -parse-as-library \
+  -module-cache-path "$test_output/module-cache" \
+  "$test_root/BetterBrightness/LaunchAtLoginController.swift" \
+  "$test_root/Tests/LaunchAtLoginTests.swift" \
+  -o "$test_output/LaunchAtLoginTests"
+"$test_output/LaunchAtLoginTests"
