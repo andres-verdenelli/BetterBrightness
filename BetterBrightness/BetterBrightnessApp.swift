@@ -8,7 +8,7 @@ struct BetterBrightnessApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarContent(controller: controller, launchAtLogin: launchAtLogin)
+            MenuBarContent(controller: controller)
         } label: {
             Label(
                 "BetterBrightness",
@@ -33,7 +33,6 @@ struct BetterBrightnessApp: App {
 
 private struct MenuBarContent: View {
     @ObservedObject var controller: BrightnessController
-    @ObservedObject var launchAtLogin: LaunchAtLoginController
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
@@ -48,10 +47,6 @@ private struct MenuBarContent: View {
             Divider()
 
             DiscoveryMenuContent(discovery: controller.discoveryController)
-
-            Divider()
-
-            LaunchAtLoginControl(controller: launchAtLogin)
 
             Divider()
 
