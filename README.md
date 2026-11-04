@@ -32,7 +32,7 @@ The app is intentionally small and native. The menu bar panel contains Pause or 
 - Configurable discovery attempts and response windows
 - Persistent settings stored locally with `UserDefaults`
 - Pause that keeps monitoring brightness while suppressing light commands
-- Optional Launch at Login, controlled from Settings or the menu bar through macOS
+- Optional Launch at Login, controlled from Settings through macOS
 
 ## Requirements
 
@@ -80,7 +80,7 @@ Newly discovered lights remain disabled until you explicitly enable them.
 
 ## Launch at login
 
-Turn on **Launch at Login** at the bottom of the Settings sidebar or in the menu bar panel to open BetterBrightness automatically when you log in to your Mac, including after a restart. Turn it off in either place to stop future automatic launches; the current app stays open.
+Turn on **Launch at Login** at the bottom of the Settings sidebar to open BetterBrightness automatically when you log in to your Mac, including after a restart. Turn it off there to stop future automatic launches; the current app stays open.
 
 BetterBrightness uses Apple's `SMAppService.mainApp` API and only registers when you turn the option on. macOS owns the setting. If approval is required, the app shows a pending message and an **Open Login Items Settings…** button. Approve BetterBrightness there; the app refreshes its status when you return. Changes made directly in System Settings are also reflected when you reopen the panel or return to the app.
 
