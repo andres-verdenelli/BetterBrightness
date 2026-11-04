@@ -32,6 +32,7 @@ The app is intentionally small and native. The menu bar panel contains Pause or 
 - Configurable discovery attempts and response windows
 - Persistent settings stored locally with `UserDefaults`
 - Pause that keeps monitoring brightness while suppressing light commands
+- Optional Launch at Login, controlled from Settings or the menu bar through macOS
 
 ## Requirements
 
@@ -77,6 +78,14 @@ For regular local installation, create a signed build in Xcode and move `BetterB
 
 Newly discovered lights remain disabled until you explicitly enable them.
 
+## Launch at login
+
+Turn on **Launch at Login** at the bottom of the Settings sidebar or in the menu bar panel to open BetterBrightness automatically when you log in to your Mac, including after a restart. Turn it off in either place to stop future automatic launches; the current app stays open.
+
+BetterBrightness uses Apple's `SMAppService.mainApp` API and only registers when you turn the option on. macOS owns the setting. If approval is required, the app shows a pending message and an **Open Login Items Settings…** button. Approve BetterBrightness there; the app refreshes its status when you return. Changes made directly in System Settings are also reflected when you reopen the panel or return to the app.
+
+Use a signed build installed in `/Applications` for the real login test. Verify enabling, any macOS approval, login after signing out or restarting, and disabling. Automated tests use a simulated service and never modify this Mac's login items.
+
 ## Brightness mapping
 
 Each light has two ranges:
@@ -116,6 +125,8 @@ macOS will ask for Local Network access because discovery and control cannot wor
 | `ConfigurationStore.swift` | Persistent settings, validation, and discovery reconciliation |
 | `WiZDiscoveryService.swift` | UDP broadcast discovery and response parsing |
 | `DiscoveryController.swift` | Shared discovery progress, results, and errors, independent of Settings |
+| `LaunchAtLoginController.swift` | macOS login item registration and current system status |
+| `LaunchAtLoginControl.swift` | Shared login toggle, approval guidance, and errors |
 | `SettingsView.swift` | Native settings interface and per-light controls |
 | `LightDraft.swift` | Editable light settings that preserve unsaved manual IP changes during discovery |
 | `BrightnessRangeControl.swift` | A shared range track with two native AppKit thumbs, keyboard and accessibility support |
@@ -138,7 +149,7 @@ The project is validated with a Release build using the full Xcode toolchain:
 
 Network discovery and UDP delivery still require testing on real Wi-Fi hardware; compilation alone cannot verify device responses.
 
-Run the discovery and range-control regression checks with `bash Tests/run.sh`. They use simulated discovery and a separate preferences domain; no real lights are controlled. See `Design/UI-REVIEW.md` for the selected design and validation evidence.
+Run the discovery, range-control, and launch-at-login regression checks with `bash Tests/run.sh`. They use simulated discovery and login services and a separate preferences domain; no real lights are controlled or login items changed. See `Design/UI-REVIEW.md` for the selected design and validation evidence.
 
 ## Contributing
 

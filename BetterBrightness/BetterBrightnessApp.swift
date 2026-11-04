@@ -4,10 +4,11 @@ import SwiftUI
 @main
 struct BetterBrightnessApp: App {
     @StateObject private var controller = BrightnessController()
+    @StateObject private var launchAtLogin = LaunchAtLoginController()
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarContent(controller: controller)
+            MenuBarContent(controller: controller, launchAtLogin: launchAtLogin)
         } label: {
             Label(
                 "BetterBrightness",
@@ -19,7 +20,10 @@ struct BetterBrightnessApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView(configurationStore: controller.configurationStore)
+            SettingsView(
+                configurationStore: controller.configurationStore,
+                launchAtLogin: launchAtLogin
+            )
                 .frame(minWidth: 740, minHeight: 560)
         }
         .defaultSize(width: 820, height: 640)
@@ -29,11 +33,8 @@ struct BetterBrightnessApp: App {
 
 private struct MenuBarContent: View {
     @ObservedObject var controller: BrightnessController
+    @ObservedObject var launchAtLogin: LaunchAtLoginController
     @Environment(\.openSettings) private var openSettings
-
-    init(controller: BrightnessController) {
-        self.controller = controller
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -47,6 +48,10 @@ private struct MenuBarContent: View {
             Divider()
 
             DiscoveryMenuContent(discovery: controller.discoveryController)
+
+            Divider()
+
+            LaunchAtLoginControl(controller: launchAtLogin)
 
             Divider()
 

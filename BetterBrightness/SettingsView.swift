@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var configurationStore: ConfigurationStore
+    @ObservedObject var launchAtLogin: LaunchAtLoginController
 
     @State private var displayIDText: String
     @State private var discoveryResponseWindowText: String
@@ -23,8 +24,9 @@ struct SettingsView: View {
         case displayID, responseWindow, attempts
     }
 
-    init(configurationStore: ConfigurationStore) {
+    init(configurationStore: ConfigurationStore, launchAtLogin: LaunchAtLoginController) {
         self.configurationStore = configurationStore
+        self.launchAtLogin = launchAtLogin
         let configuration = configurationStore.configuration
         _displayIDText = State(initialValue: String(configuration.monitor.displayID))
         _discoveryResponseWindowText = State(
@@ -61,6 +63,13 @@ struct SettingsView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    Divider()
+                    LaunchAtLoginControl(controller: launchAtLogin)
+                        .padding(12)
+                }
+            }
         } detail: {
             if let id = selectedLightID,
                let index = lights.firstIndex(where: { $0.id == id }) {
