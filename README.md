@@ -67,6 +67,32 @@ xcodebuild \
 
 For regular local installation, create a signed build in Xcode and move `BetterBrightness.app` to `/Applications`.
 
+### Repository tooling
+
+Reusable developer and local maintenance commands live in `scripts/` and are versioned with the project, even though they are not included in the installed app. Build products, caches, personal settings, and installation backups stay outside version control. Agent instructions in [`AGENTS.md`](AGENTS.md) point to the relevant maintenance procedures.
+
+### Personal updates from GitHub
+
+For a personal installation built with a local ad hoc signature, run this from your checkout:
+
+```bash
+bash scripts/update-local.sh
+```
+
+The script fetches `main` from this repository's `origin`, exports that exact commit into a temporary directory, runs its regression checks, and builds a Release app with Xcode. It leaves your current branch and working files untouched; uncommitted changes and changes on other branches are not installed. Xcode at `/Applications/Xcode.app` is selected for this command without changing your system's developer-tool selection. Use `DEVELOPER_DIR` to select another full Xcode installation.
+
+Only after the build and signature checks pass does the script back up the installed app, quit it, replace `/Applications/BetterBrightness.app`, and open the new version. It preserves the installed app's sandbox mode and bundle identifier so it continues using the same preferences location. It does not change preferences or register login items. This is a manual update command, with no scheduled or background updater.
+
+Previous apps are kept under `~/Library/Application Support/BetterBrightness/Backups/`, in a separate dated folder for each update. To go back, quit BetterBrightness and use Finder to copy the desired backup's `BetterBrightness.app` into `/Applications`, replacing the current app, then reopen it. Backups remain until you delete them.
+
+To run the checks and produce an app without installing or opening it:
+
+```bash
+bash scripts/update-local.sh --build-only
+```
+
+This prints the resulting app's temporary path. Both modes record the source commit in the app's `Info.plist` as `BetterBrightnessGitCommit`; normal updates also print the installed commit. The script requires network access, a full Xcode installation, and permission to write to `/Applications`. It stops if an existing app uses a certificate-based signature, to avoid replacing it with a different signing identity.
+
 ## First-time setup
 
 1. Launch BetterBrightness from the menu bar.
