@@ -12,6 +12,8 @@ After an update, verify the installed signature with `codesign --verify --deep -
 
 ## Repository tooling
 
+For UI changes, run `bash scripts/preview-ui.sh` before asking the user to review the result. It builds and runs an isolated preview with Settings already open; see [Repository tooling](README.md#repository-tooling). Compilation alone does not validate visual behavior.
+
 Keep reusable developer and local maintenance commands in `scripts/`, tracked in Git alongside their documentation. These tools support the project and are separate from the code shipped inside the app. Generated builds, caches, personal settings, and app backups stay outside version control.
 
 Publishing changes to GitHub and updating the installed app are separate operations. State which operation was performed.

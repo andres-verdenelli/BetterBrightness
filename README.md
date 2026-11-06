@@ -71,6 +71,8 @@ For regular local installation, create a signed build in Xcode and move `BetterB
 
 Reusable developer and local maintenance commands live in `scripts/` and are versioned with the project, even though they are not included in the installed app. Build products, caches, personal settings, and installation backups stay outside version control. Agent instructions in [`AGENTS.md`](AGENTS.md) point to the relevant maintenance procedures.
 
+For UI review, run `bash scripts/preview-ui.sh`. It builds the current checkout as a signed Debug preview, restarts that preview, and opens Settings automatically. The preview uses a separate bundle identifier and preferences; it does not replace or quit `/Applications/BetterBrightness.app`. Build products and logs are kept in a temporary directory. The `--preview-settings` launch option is available only in Debug builds.
+
 ### Personal updates from GitHub
 
 For a personal installation built with a local ad hoc signature, run this from your checkout:

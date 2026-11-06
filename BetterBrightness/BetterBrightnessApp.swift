@@ -16,6 +16,9 @@ struct BetterBrightnessApp: App {
                     ? "sun.max"
                     : "sun.max.fill"
             )
+#if DEBUG
+            .background { SettingsPreviewLauncher() }
+#endif
         }
         .menuBarExtraStyle(.window)
 
@@ -30,6 +33,21 @@ struct BetterBrightnessApp: App {
         .windowResizability(.contentMinSize)
     }
 }
+
+#if DEBUG
+/// Allows an isolated UI preview to open Settings immediately after launch.
+private struct SettingsPreviewLauncher: View {
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        Color.clear.task {
+            guard ProcessInfo.processInfo.arguments.contains("--preview-settings") else { return }
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            openSettings()
+        }
+    }
+}
+#endif
 
 private struct MenuBarContent: View {
     @ObservedObject var controller: BrightnessController
