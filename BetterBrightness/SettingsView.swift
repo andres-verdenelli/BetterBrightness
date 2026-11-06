@@ -10,6 +10,7 @@ struct SettingsView: View {
     @State private var discoveryAttemptCountText: String
     @State private var lights: [LightDraft]
     @State private var selectedLightID: UUID?
+    @State private var isSidebarVisible = true
     @State private var showsAdvanced = false
     @State private var errorMessage = ""
     @State private var showsError = false
@@ -43,7 +44,7 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
+        SettingsSplitView(isSidebarVisible: $isSidebarVisible) {
             List(selection: selectionBinding) {
                 Section("Lights") {
                     ForEach(sortedLightIDs, id: \.self) { id in
@@ -62,7 +63,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
+            .listStyle(.sidebar)
         } detail: {
             if let id = selectedLightID,
                let index = lights.firstIndex(where: { $0.id == id }) {
@@ -79,7 +80,20 @@ struct SettingsView: View {
                 ContentUnavailableView("Select a Light", systemImage: "lightbulb")
             }
         }
+        .ignoresSafeArea(.container, edges: .top)
+        .navigationTitle(lights.first(where: { $0.id == selectedLightID })?.displayName ?? "Settings")
         .toolbar {
+            ToolbarItem(id: "sidebarToggle", placement: .navigation) {
+                Button(
+                    isSidebarVisible ? "Hide Sidebar" : "Show Sidebar",
+                    systemImage: "sidebar.left"
+                ) {
+                    withAnimation {
+                        isSidebarVisible.toggle()
+                    }
+                }
+                .help(isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
+            }
             ToolbarItemGroup {
                 Button("Add Light Manually", systemImage: "plus") {
                     finishRename()
@@ -100,7 +114,7 @@ struct SettingsView: View {
             }
         }
         .background {
-            SettingsFocusMonitor { advancedField = nil }
+            SettingsWindowSupport { advancedField = nil }
         }
         .onReceive(configurationStore.$configuration) { configuration in
             mergeDiscoveryChangesIntoDrafts(configuration)
@@ -262,7 +276,7 @@ struct SettingsView: View {
         }
         .frame(width: 460, height: 480)
         .background {
-            SettingsFocusMonitor { advancedField = nil }
+            SettingsWindowSupport { advancedField = nil }
         }
         .onChange(of: advancedField) { previous, _ in
             if previous == .displayID { saveDisplayIDIfNeeded() }
@@ -433,7 +447,7 @@ struct SettingsView: View {
     }
 }
 
-private struct SettingsFocusMonitor: NSViewRepresentable {
+private struct SettingsWindowSupport: NSViewRepresentable {
     let onDismissFocus: () -> Void
 
     func makeCoordinator() -> Coordinator {
@@ -485,6 +499,11 @@ private struct SettingsFocusMonitor: NSViewRepresentable {
                 uninstall()
                 monitoredWindow = window
                 didClearInitialFocus = false
+
+                // Configure each window once, without reapplying during view updates.
+                // Settings scenes can override SwiftUI's scene-level toolbar style.
+                window.toolbarStyle = .unified
+                window.styleMask.insert(.fullSizeContentView)
             }
 
             if eventMonitor == nil {
