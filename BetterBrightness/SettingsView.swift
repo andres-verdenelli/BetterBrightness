@@ -63,13 +63,6 @@ struct SettingsView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                VStack(spacing: 0) {
-                    Divider()
-                    LaunchAtLoginControl(controller: launchAtLogin)
-                        .padding(12)
-                }
-            }
         } detail: {
             if let id = selectedLightID,
                let index = lights.firstIndex(where: { $0.id == id }) {
@@ -103,7 +96,7 @@ struct SettingsView: View {
                     guard saveConfiguration() else { return }
                     showsAdvanced = true
                 }
-                .help("Monitor and discovery settings")
+                .help("Launch at Login, monitor, and discovery settings")
             }
         }
         .background {
@@ -223,6 +216,9 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             Form {
                 Section {
+                    LaunchAtLoginControl(controller: launchAtLogin)
+                }
+                Section {
                     TextField("BetterDisplay display ID", text: displayIDBinding)
                         .focused($advancedField, equals: .displayID)
                         .onSubmit(saveDisplayIDIfNeeded)
@@ -264,7 +260,7 @@ struct SettingsView: View {
             }
             .padding()
         }
-        .frame(width: 460, height: 360)
+        .frame(width: 460, height: 480)
         .background {
             SettingsFocusMonitor { advancedField = nil }
         }
