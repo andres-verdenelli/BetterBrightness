@@ -153,10 +153,9 @@ struct SettingsView: View {
     }
 
     private func sidebarRow(_ light: LightDraft) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .center, spacing: 10) {
             Image(systemName: light.isIPAddressVerified ? "lightbulb" : "exclamationmark.triangle")
                 .foregroundStyle(light.isIPAddressVerified ? Color.secondary : Color.orange)
-                .padding(.top, 2)
             VStack(alignment: .leading, spacing: 4) {
                 if renamingLightID == light.id {
                     TextField("Light name", text: $renameText)
@@ -178,12 +177,12 @@ struct SettingsView: View {
                         .lineLimit(1)
                         .help(light.displayName)
                 }
-                Text(light.isIPAddressVerified
-                     ? (light.ip.isEmpty ? "Enter an IP address" : light.ip)
-                     : "Waiting for rediscovery")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if !light.isIPAddressVerified {
+                    Text("Waiting for rediscovery")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 0)
         }
