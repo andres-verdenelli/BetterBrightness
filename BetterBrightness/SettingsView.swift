@@ -481,6 +481,11 @@ private struct SettingsFocusMonitor: NSViewRepresentable {
         func install(in window: NSWindow?) {
             guard let window else { return }
 
+            // Settings scenes can override SwiftUI's scene-level toolbar style.
+            // Configure the actual window so its title bar and toolbar share a row.
+            window.toolbarStyle = .unified
+            window.styleMask.insert(.fullSizeContentView)
+
             if monitoredWindow !== window {
                 uninstall()
                 monitoredWindow = window
