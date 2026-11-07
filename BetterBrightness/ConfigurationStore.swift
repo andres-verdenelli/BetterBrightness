@@ -4,7 +4,6 @@ import Network
 
 enum ConfigurationError: LocalizedError {
     case invalidDisplayID
-    case noLights
     case lightNumberExhausted
     case invalidIPAddress(String)
     case invalidMACAddress(String)
@@ -22,8 +21,6 @@ enum ConfigurationError: LocalizedError {
             return "The monitor ID must be greater than zero."
         case .lightNumberExhausted:
             return "No more default light numbers are available."
-        case .noLights:
-            return "Add at least one WiZ light."
         case .invalidIPAddress(let ip):
             return "\(ip.isEmpty ? "One light" : ip) is not a valid IPv4 address."
         case .invalidMACAddress(let macAddress):
@@ -78,9 +75,6 @@ final class ConfigurationStore: ObservableObject {
     ) throws {
         guard displayID > 0 else {
             throw ConfigurationError.invalidDisplayID
-        }
-        guard !lights.isEmpty else {
-            throw ConfigurationError.noLights
         }
 
         let discovery = discovery ?? configuration.discovery
@@ -288,19 +282,6 @@ final class ConfigurationStore: ObservableObject {
             identifiedExistingLights: identifiedExistingLightCount,
             invalidatedIPs: invalidatedLightIDs.count
         )
-    }
-
-    /// Reserve before adding a manual draft, so abandoned drafts never reuse numbers.
-    func reserveNextLightName() throws -> String {
-        let number = configuration.nextLightNumber
-        guard number < Int.max else { throw ConfigurationError.lightNumberExhausted }
-        try persist(AppConfiguration(
-            monitor: configuration.monitor,
-            lights: configuration.lights,
-            discovery: configuration.discovery,
-            nextLightNumber: number + 1
-        ))
-        return "Light \(number)"
     }
 
     private static func invalidatingAmbiguousAddresses(

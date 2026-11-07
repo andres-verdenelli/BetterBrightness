@@ -62,21 +62,7 @@ struct AppConfiguration: Codable {
     // Built-in defaults. Saved settings replace these values after the first save.
     static let current = AppConfiguration(
         monitor: MonitorConfiguration(displayID: 3),
-        lights: [
-            LightConfiguration(
-                id: UUID(),
-                name: "Light 1",
-                ip: "192.168.1.2",
-                isEnabled: false,
-                port: 38899,
-                mapping: BrightnessMapping(
-                    monitorMin: 40,
-                    monitorMax: 80,
-                    lightMinPercent: 1,
-                    lightMaxPercent: 100
-                )
-            ),
-        ]
+        lights: []
     )
 }
 

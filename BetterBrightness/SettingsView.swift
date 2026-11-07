@@ -54,7 +54,6 @@ struct SettingsView: View {
                                     Button("Remove Light…", role: .destructive) {
                                         requestRemoval(light)
                                     }
-                                    .disabled(lights.count <= 1)
                                 }
                         }
                     }
@@ -79,7 +78,11 @@ struct SettingsView: View {
                 )
                 .id(id)
             } else {
-                ContentUnavailableView("Select a Light", systemImage: "lightbulb")
+                ContentUnavailableView(
+                    lights.isEmpty ? "No Lights" : "Select a Light",
+                    systemImage: "lightbulb",
+                    description: Text("Choose Discover Lights from the menu bar to find lights on your network.")
+                )
             }
         }
         .ignoresSafeArea(.container, edges: .top)
@@ -97,22 +100,6 @@ struct SettingsView: View {
                 .help(isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
             }
             ToolbarItemGroup {
-                Button("Add Light Manually", systemImage: "plus") {
-                    finishRename()
-                    guard saveConfiguration() else { return }
-                    do {
-                        let name = try configurationStore.reserveNextLightName()
-                        let light = LightDraft(name: name)
-                        lights.append(light)
-                        selectedLightID = light.id
-                        beginRename(light.id)
-                    } catch {
-                        errorMessage = error.localizedDescription
-                        showsError = true
-                    }
-                }
-                .help("Add a light by IP address")
-
                 Button("Advanced Settings", systemImage: "gearshape") {
                     finishRename()
                     guard saveConfiguration() else { return }
@@ -201,8 +188,7 @@ struct SettingsView: View {
               let index = lights.firstIndex(where: { $0.id == id }) else { return }
         lights[index].name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
         renamingLightID = nil
-        // A manually added light can be named before its IP address is entered.
-        if !lights[index].ip.isEmpty { saveConfiguration() }
+        saveConfiguration()
     }
 
     private func cancelRename() {
@@ -290,7 +276,7 @@ struct SettingsView: View {
         do {
             try configurationStore.save(
                 displayID: displayID,
-                lights: LightDraft.configurationsForSaving(lights),
+                lights: lights.map(\.configuration),
                 discovery: discoveryConfiguration
             )
             return true
@@ -418,7 +404,6 @@ struct SettingsView: View {
     }
 
     private func removeLight(_ id: UUID) {
-        guard lights.count > 1 else { return }
         guard let removedIndex = lights.firstIndex(where: { $0.id == id }) else { return }
         let removed = lights.remove(at: removedIndex)
         guard saveConfiguration() else {
@@ -556,7 +541,6 @@ private struct LightDetailView: View {
     let onCancelRename: () -> Void
     let onCommit: () -> Void
     @FocusState private var isNameFocused: Bool
-    @FocusState private var isIPFocused: Bool
 
     private let syncHelp = "When on, this light follows brightness changes from your selected BetterDisplay monitor. Turn it off to stop sending brightness updates to this light."
 
@@ -605,16 +589,9 @@ private struct LightDetailView: View {
                 LabeledContent("Name") {
                     nameEditor.multilineTextAlignment(.trailing)
                 }
-                if light.macAddress == nil {
-                    TextField("IP address", text: $light.ip)
-                        .focused($isIPFocused)
-                        .onSubmit(onCommit)
-                        .help("Discover lights from the menu bar to identify this light by MAC address.")
-                } else {
-                    LabeledContent("IP address", value: light.ip)
-                    if let mac = light.macAddress {
-                        LabeledContent("MAC address", value: WiZMACAddress.display(mac))
-                    }
+                LabeledContent("IP address", value: light.ip)
+                if let mac = light.macAddress {
+                    LabeledContent("MAC address", value: WiZMACAddress.display(mac))
                 }
             }
         }
@@ -622,9 +599,6 @@ private struct LightDetailView: View {
         .navigationTitle(light.displayName)
         .onChange(of: isNameFocused) { wasFocused, focused in
             if wasFocused && !focused && isRenaming { onFinishRename() }
-        }
-        .onChange(of: isIPFocused) { previous, current in
-            if previous && !current { onCommit() }
         }
     }
 

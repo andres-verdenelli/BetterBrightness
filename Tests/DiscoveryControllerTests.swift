@@ -81,9 +81,36 @@ struct DiscoveryControllerTests {
         precondition(store.configuration.lights.first?.ip == "192.0.2.20")
         print("PASS: save failures surface without partially applying discovery")
 
+        try testDiscoveryOnly()
         try testNumberedNames()
         try LightDraftTests.run()
     }
+    @MainActor
+    private static func testDiscoveryOnly() throws {
+        let suite = "BetterBrightness.DiscoveryOnlyTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ConfigurationStore(defaults: defaults)
+        precondition(store.configuration.lights.isEmpty && store.configuration.nextLightNumber == 1)
+        try store.save(displayID: 5, lights: [], discovery: .standard)
+        precondition(ConfigurationStore(defaults: defaults).configuration.monitor.displayID == 5)
+        _ = try store.applyDiscoveryResults([])
+        precondition(store.configuration.lights.isEmpty && store.configuration.nextLightNumber == 1)
+        let reply = DiscoveredWiZLight(macAddress: "aabbccddeeff", ipAddress: "192.0.2.10",
+                                      deviceInfo: WiZDeviceInfo())
+        _ = try store.applyDiscoveryResults([reply])
+        precondition(store.configuration.lights.count == 1)
+        precondition(store.configuration.lights[0].name == "Light 1")
+        precondition(store.configuration.lights[0].macAddress == reply.macAddress)
+        precondition(!store.configuration.lights[0].isEnabled)
+        try store.save(displayID: 5, lights: [])
+        let reloaded = ConfigurationStore(defaults: defaults)
+        precondition(reloaded.configuration.lights.isEmpty && reloaded.configuration.nextLightNumber == 2)
+        _ = try reloaded.applyDiscoveryResults([reply])
+        precondition(reloaded.configuration.lights[0].name == "Light 2")
+        print("PASS: fresh installation and zero replies add no lights; settings and last-light removal support an empty list")
+    }
+
     @MainActor
     private static func testNumberedNames() throws {
         let suite = "BetterBrightness.NumberingTests.\(UUID().uuidString)"
@@ -108,9 +135,6 @@ struct DiscoveryControllerTests {
         precondition(empty.nextLightNumber == 1)
         print("PASS: legacy configuration infers numbering and preserves existing names")
 
-        // Reserve a manual name without saving a draft: an abandoned number stays consumed.
-        let manualName = try store.reserveNextLightName()
-        precondition(manualName == "Light 8")
         let discovered = [
             DiscoveredWiZLight(macAddress: "aabbccddee02", ipAddress: "192.0.2.12",
                                deviceInfo: WiZDeviceInfo(moduleName: "ESP25_SHRGB_01")),
@@ -118,25 +142,28 @@ struct DiscoveryControllerTests {
                                deviceInfo: WiZDeviceInfo())
         ]
         _ = try store.applyDiscoveryResults(discovered)
-        precondition(store.configuration.lights.suffix(2).map(\.name) == ["Light 9", "Light 10"])
+        precondition(store.configuration.lights.suffix(2).map(\.name) == ["Light 8", "Light 9"])
         precondition(store.configuration.lights.last?.deviceInfo?.moduleName == "ESP25_SHRGB_01")
-        precondition(store.configuration.nextLightNumber == 11)
+        precondition(store.configuration.nextLightNumber == 10)
         _ = try store.applyDiscoveryResults(discovered.reversed())
-        precondition(store.configuration.nextLightNumber == 11 && store.configuration.lights.count == 5)
-        print("PASS: manual and discovered lights share a sequence ordered by MAC, not response order")
+        precondition(store.configuration.nextLightNumber == 10 && store.configuration.lights.count == 5)
+        print("PASS: discoveries receive sequential names ordered by MAC, not response order")
 
         var changed = store.configuration.lights
         changed[3].name = "Kitchen"
         changed.removeLast()
         try store.save(displayID: 3, lights: changed)
         let reloaded = ConfigurationStore(defaults: defaults)
-        let afterReload = try reloaded.reserveNextLightName()
-        precondition(afterReload == "Light 11")
+        _ = try reloaded.applyDiscoveryResults([discovered[0]])
+        precondition(reloaded.configuration.lights.last?.name == "Light 10")
         var collision = reloaded.configuration.lights
         collision[0].name = "Light 12"
         try reloaded.save(displayID: 3, lights: collision)
-        let afterCollision = try reloaded.reserveNextLightName()
-        precondition(afterCollision == "Light 13")
+        _ = try reloaded.applyDiscoveryResults([
+            DiscoveredWiZLight(macAddress: "aabbccddee03", ipAddress: "192.0.2.13",
+                               deviceInfo: WiZDeviceInfo())
+        ])
+        precondition(reloaded.configuration.lights.last?.name == "Light 13")
         let counter = reloaded.configuration.nextLightNumber
         do {
             _ = try reloaded.applyDiscoveryResults([

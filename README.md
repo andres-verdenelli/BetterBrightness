@@ -23,7 +23,7 @@ The app is intentionally small and native. The menu bar panel contains Pause or 
 
 - Native SwiftUI menu bar app for macOS
 - BetterDisplay brightness notification listener
-- Automatic and manual WiZ discovery over the local network
+- Automatic WiZ discovery at launch and on-demand broadcast discovery over the local network
 - Stable light identity based on MAC address, with automatic DHCP address updates
 - Safe reconciliation when a responding light reuses an address held by an unavailable device
 - Per-light enable switch and custom name
@@ -104,7 +104,7 @@ This prints the resulting app's temporary path. Both modes record the source com
 5. Select each discovered light in Settings and enable **Sync brightness** for each light you want to control. Edit **Name** in the selected light’s **Light** section, beside its IP and MAC addresses, to rename it. Press Return or leave the field to save; Escape cancels. Right-click in the sidebar provides **Remove Light**.
 6. Drag the two handles on the Monitor or Light slider to choose its range. The minimum and maximum percentages appear at the left and right; changes save when you finish dragging. Hover over or click **?** for an explanation. The gear button opens Advanced Settings, including the BetterDisplay display ID.
 
-Newly discovered lights remain disabled until you explicitly enable them. New discoveries and manually added lights receive numbered names (`Light 1`, `Light 2`, and so on) from a shared, saved sequence. Existing names are preserved, and numbers are not reused after renaming, removal, or an abandoned manual addition.
+Newly discovered lights remain disabled until you explicitly enable them. Lights are added only when they respond to a Discovery broadcast; manual entry by IP is not available. New discoveries receive numbered names (`Light 1`, `Light 2`, and so on) from a saved sequence. Existing names are preserved, and numbers are not reused after renaming or removal. A new installation starts with no lights. IP and MAC addresses in Settings are read-only and updated by Discovery.
 
 ## Launch at login
 
@@ -156,7 +156,7 @@ macOS will ask for Local Network access because discovery and control cannot wor
 | `LaunchAtLoginController.swift` | macOS login item registration and current system status |
 | `LaunchAtLoginControl.swift` | Shared login toggle, approval guidance, and errors |
 | `SettingsView.swift` | Native settings interface and per-light controls |
-| `LightDraft.swift` | Editable light settings that preserve unsaved manual IP changes during discovery |
+| `LightDraft.swift` | Editable light settings that preserve name and brightness edits while merging discovered addresses |
 | `BrightnessRangeControl.swift` | A shared range track with two native AppKit thumbs, keyboard and accessibility support |
 
 See [ROADMAP.md](ROADMAP.md) for implementation notes and possible future improvements.
