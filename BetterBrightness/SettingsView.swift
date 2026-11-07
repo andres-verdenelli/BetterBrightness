@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var configurationStore: ConfigurationStore
+    @ObservedObject var discovery: DiscoveryController
     @ObservedObject var launchAtLogin: LaunchAtLoginController
 
     @State private var displayIDText: String
@@ -24,8 +25,9 @@ struct SettingsView: View {
         case displayID, responseWindow, attempts
     }
 
-    init(configurationStore: ConfigurationStore, launchAtLogin: LaunchAtLoginController) {
+    init(configurationStore: ConfigurationStore, discovery: DiscoveryController, launchAtLogin: LaunchAtLoginController) {
         self.configurationStore = configurationStore
+        self.discovery = discovery
         self.launchAtLogin = launchAtLogin
         let configuration = configurationStore.configuration
         _displayIDText = State(initialValue: String(configuration.monitor.displayID))
@@ -81,7 +83,7 @@ struct SettingsView: View {
                 ContentUnavailableView(
                     lights.isEmpty ? "No Lights" : "Select a Light",
                     systemImage: "lightbulb",
-                    description: Text("Choose Discover Lights from the menu bar to find lights on your network.")
+                    description: Text("Open Advanced Settings with the gear button, then choose Discover Lights to find lights on your network.")
                 )
             }
         }
@@ -211,6 +213,10 @@ struct SettingsView: View {
                     Text("Use the displayID shown in BetterDisplay brightness notifications.")
                 }
                 Section {
+                    DiscoverySettingsContent(discovery: discovery) {
+                        guard saveConfiguration() else { return }
+                        discovery.discoverLights()
+                    }
                     LabeledContent("Response window") {
                         HStack(spacing: 4) {
                             TextField("Response window", text: discoveryResponseWindowBinding)
@@ -228,7 +234,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Discovery")
                 } footer: {
-                    Text("Default: 500 ms and 3 attempts. Longer windows and more attempts make discovery take longer. Discover lights from the menu bar.")
+                    Text("Default: 500 ms and 3 attempts. Longer windows and more attempts make discovery take longer. Use Discover Lights above to search your network.")
                 }
             }
             .formStyle(.grouped)
@@ -243,7 +249,7 @@ struct SettingsView: View {
             }
             .padding()
         }
-        .frame(width: 460, height: 480)
+        .frame(width: 460, height: 640)
         .background {
             SettingsWindowSupport { advancedField = nil }
         }
@@ -674,6 +680,62 @@ private struct SettingsHelpButton: View {
         }
         .onChange(of: isPresented) { _, shown in
             if !shown { isPinned = false }
+        }
+    }
+}
+
+struct DiscoverySettingsContent: View {
+    @ObservedObject var discovery: DiscoveryController
+
+    let onDiscover: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Button("Discover Lights", systemImage: "dot.radiowaves.left.and.right") {
+                    onDiscover()
+                }
+                .disabled(discovery.isDiscovering)
+                .buttonStyle(.bordered)
+
+                Spacer(minLength: 0)
+
+                status
+                    .multilineTextAlignment(.trailing)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !discovery.isDiscovering, let errorMessage = discovery.errorMessage {
+                Text(errorMessage)
+            } else if !discovery.isDiscovering,
+                      let summary = discovery.lastSummary,
+                      summary.invalidatedIPs > 0 {
+                Text("\(summary.invalidatedIPs) waiting for rediscovery")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        if discovery.isDiscovering {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(discovery.attempt == 0
+                     ? "Starting discovery…"
+                     : "Attempt \(discovery.attempt) of \(discovery.totalAttempts)")
+            }
+        } else if discovery.errorMessage != nil {
+            Text("Discovery failed")
+        } else if let summary = discovery.lastSummary {
+            if summary.foundLights == 0 {
+                Text("No WiZ lights found")
+            } else if summary.newLights == 0 {
+                Text("No new lights found")
+            } else {
+                Text("\(summary.newLights) new \(summary.newLights == 1 ? "light" : "lights") found")
+            }
         }
     }
 }

@@ -17,7 +17,7 @@
 
 BetterBrightness keeps compatible WiZ lights visually aligned with a selected monitor. It listens for local brightness notifications from BetterDisplay, maps the monitor range to a configurable range for each light, and sends WiZ commands directly over UDP.
 
-The app is intentionally small and native. The menu bar panel contains Pause or Resume, Discover Lights, its progress and latest results, Settings, and Quit. The panel stays open during discovery. Settings uses a light list and a dedicated brightness-mapping editor, with monitor and discovery options under Advanced Settings.
+The app is intentionally small and native. The menu bar panel contains Pause or Resume, Settings, and Quit. Discover Lights, its progress, latest results, and errors appear under Discovery in Advanced Settings. Settings uses a light list and a dedicated brightness-mapping editor, with monitor and discovery options under Advanced Settings.
 
 ## Features
 
@@ -100,7 +100,7 @@ This prints the resulting app's temporary path. Both modes record the source com
 1. Launch BetterBrightness from the menu bar.
 2. Open **Settings**.
 3. Open **Advanced Settings** with the gear button and confirm the BetterDisplay display ID for the monitor you want to follow.
-4. Select **Discover Lights** from the menu bar while the Mac and lights are on the same network. Its results show the lights found and IP addresses updated.
+4. In **Advanced Settings → Discovery**, select **Discover Lights** while the Mac and lights are on the same network. Its results show the lights found and IP addresses updated.
 5. Select each discovered light in Settings and enable **Sync brightness** for each light you want to control. Edit **Name** in the selected light’s **Light** section, beside its IP and MAC addresses, to rename it. Press Return or leave the field to save; Escape cancels. Right-click in the sidebar provides **Remove Light**.
 6. Edit the monitor and light percentages under **Dim light** and **Bright light**. Press Return or leave a field to save; use the steppers for 1% adjustments. Hover over or click **?** for an explanation. The gear button opens Advanced Settings, including the BetterDisplay display ID.
 
@@ -127,7 +127,7 @@ The light changes linearly between the two points and stays at the nearest light
 - **Response window** controls how long the app listens after each discovery broadcast. The default is 500 ms; 500–1,000 ms is recommended.
 - **Attempts** controls how many broadcasts are sent. The default is 3; 3–5 is usually sufficient, and the maximum is 10.
 
-Longer windows and more attempts can improve discovery on slower networks, but also make each scan take longer.
+Longer windows and more attempts can improve discovery on slower networks, but also make each scan take longer. The Discover Lights button saves valid settings before starting a scan and is disabled during discovery. Closing Settings does not stop the scan; reopening Advanced Settings shows its progress or latest result for the current app session. Progress and the final result appear to the right of the button. Results report new lights found, no new lights, or no WiZ lights found. Errors are displayed in full below the button; select Discover Lights to retry. Automatic discovery at launch remains enabled.
 
 ## Privacy and networking
 
