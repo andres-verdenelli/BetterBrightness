@@ -5,6 +5,7 @@ import Network
 enum ConfigurationError: LocalizedError {
     case invalidDisplayID
     case noLights
+    case lightNumberExhausted
     case invalidIPAddress(String)
     case invalidMACAddress(String)
     case duplicateIPAddress(String)
@@ -19,6 +20,8 @@ enum ConfigurationError: LocalizedError {
         switch self {
         case .invalidDisplayID:
             return "The monitor ID must be greater than zero."
+        case .lightNumberExhausted:
+            return "No more default light numbers are available."
         case .noLights:
             return "Add at least one WiZ light."
         case .invalidIPAddress(let ip):
@@ -169,7 +172,8 @@ final class ConfigurationStore: ObservableObject {
         let newConfiguration = AppConfiguration(
             monitor: MonitorConfiguration(displayID: displayID),
             lights: normalizedLights,
-            discovery: discovery
+            discovery: discovery,
+            nextLightNumber: configuration.nextLightNumber
         )
         try persist(newConfiguration)
     }
@@ -178,6 +182,7 @@ final class ConfigurationStore: ObservableObject {
         _ discoveredLights: [DiscoveredWiZLight]
     ) throws -> DiscoveryMergeSummary {
         var lights = configuration.lights
+        var nextLightNumber = configuration.nextLightNumber
         var newLightCount = 0
         var updatedIPCount = 0
         var identifiedExistingLightCount = 0
@@ -199,7 +204,7 @@ final class ConfigurationStore: ObservableObject {
                 discoveredLight.macAddress
         }
 
-        for discoveredLight in discoveredLights {
+        for discoveredLight in discoveredLights.sorted(by: { $0.macAddress < $1.macAddress }) {
             if let index = lights.firstIndex(where: { light in
                 light.macAddress.flatMap(WiZMACAddress.normalized) ==
                     discoveredLight.macAddress
@@ -224,9 +229,12 @@ final class ConfigurationStore: ObservableObject {
                 continue
             }
 
+            guard nextLightNumber < Int.max else { throw ConfigurationError.lightNumberExhausted }
+            let name = "Light \(nextLightNumber)"
+            nextLightNumber += 1
             lights.append(
                 LightConfiguration(
-                    name: discoveredLight.deviceInfo.moduleName ?? "WiZ Light",
+                    name: name,
                     macAddress: discoveredLight.macAddress,
                     ip: discoveredLight.ipAddress,
                     isIPAddressVerified: true,
@@ -268,7 +276,8 @@ final class ConfigurationStore: ObservableObject {
         let newConfiguration = AppConfiguration(
             monitor: configuration.monitor,
             lights: lights,
-            discovery: configuration.discovery
+            discovery: configuration.discovery,
+            nextLightNumber: nextLightNumber
         )
         try persist(newConfiguration)
 
@@ -279,6 +288,19 @@ final class ConfigurationStore: ObservableObject {
             identifiedExistingLights: identifiedExistingLightCount,
             invalidatedIPs: invalidatedLightIDs.count
         )
+    }
+
+    /// Reserve before adding a manual draft, so abandoned drafts never reuse numbers.
+    func reserveNextLightName() throws -> String {
+        let number = configuration.nextLightNumber
+        guard number < Int.max else { throw ConfigurationError.lightNumberExhausted }
+        try persist(AppConfiguration(
+            monitor: configuration.monitor,
+            lights: configuration.lights,
+            discovery: configuration.discovery,
+            nextLightNumber: number + 1
+        ))
+        return "Light \(number)"
     }
 
     private static func invalidatingAmbiguousAddresses(
@@ -300,7 +322,8 @@ final class ConfigurationStore: ObservableObject {
         return AppConfiguration(
             monitor: configuration.monitor,
             lights: lights,
-            discovery: configuration.discovery
+            discovery: configuration.discovery,
+            nextLightNumber: configuration.nextLightNumber
         )
     }
 

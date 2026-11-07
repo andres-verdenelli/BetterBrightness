@@ -100,10 +100,16 @@ struct SettingsView: View {
                 Button("Add Light Manually", systemImage: "plus") {
                     finishRename()
                     guard saveConfiguration() else { return }
-                    let light = LightDraft()
-                    lights.append(light)
-                    selectedLightID = light.id
-                    beginRename(light.id)
+                    do {
+                        let name = try configurationStore.reserveNextLightName()
+                        let light = LightDraft(name: name)
+                        lights.append(light)
+                        selectedLightID = light.id
+                        beginRename(light.id)
+                    } catch {
+                        errorMessage = error.localizedDescription
+                        showsError = true
+                    }
                 }
                 .help("Add a light by IP address")
 

@@ -104,7 +104,7 @@ This prints the resulting app's temporary path. Both modes record the source com
 5. Select each discovered light in Settings and enable **Sync brightness** for each light you want to control. Edit **Name** in the selected light’s **Light** section, beside its IP and MAC addresses, to rename it. Press Return or leave the field to save; Escape cancels. Right-click in the sidebar provides **Remove Light**.
 6. Drag the two handles on the Monitor or Light slider to choose its range. The minimum and maximum percentages appear at the left and right; changes save when you finish dragging. Hover over or click **?** for an explanation. The gear button opens Advanced Settings, including the BetterDisplay display ID.
 
-Newly discovered lights remain disabled until you explicitly enable them.
+Newly discovered lights remain disabled until you explicitly enable them. New discoveries and manually added lights receive numbered names (`Light 1`, `Light 2`, and so on) from a shared, saved sequence. Existing names are preserved, and numbers are not reused after renaming, removal, or an abandoned manual addition.
 
 ## Launch at login
 

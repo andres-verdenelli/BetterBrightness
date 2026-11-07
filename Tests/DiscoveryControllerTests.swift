@@ -81,6 +81,74 @@ struct DiscoveryControllerTests {
         precondition(store.configuration.lights.first?.ip == "192.0.2.20")
         print("PASS: save failures surface without partially applying discovery")
 
+        try testNumberedNames()
         try LightDraftTests.run()
     }
+    @MainActor
+    private static func testNumberedNames() throws {
+        let suite = "BetterBrightness.NumberingTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        func light(_ name: String, _ ip: String) -> LightConfiguration {
+            LightConfiguration(name: name, ip: ip, isEnabled: false,
+                mapping: BrightnessMapping(monitorMin: 40, monitorMax: 80,
+                                          lightMinPercent: 1, lightMaxPercent: 100))
+        }
+        let legacy = AppConfiguration(monitor: MonitorConfiguration(displayID: 3), lights: [
+            light("Desk", "192.0.2.1"), light("ESP25_SHRGB_01", "192.0.2.2"),
+            light("Light 7", "192.0.2.3")
+        ])
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as! [String: Any]
+        json.removeValue(forKey: "nextLightNumber")
+        defaults.set(try JSONSerialization.data(withJSONObject: json), forKey: "betterBrightness.configuration")
+        let store = ConfigurationStore(defaults: defaults)
+        precondition(store.configuration.nextLightNumber == 8)
+        precondition(store.configuration.lights.map(\.name) == ["Desk", "ESP25_SHRGB_01", "Light 7"])
+        let empty = AppConfiguration(monitor: MonitorConfiguration(displayID: 3), lights: [])
+        precondition(empty.nextLightNumber == 1)
+        print("PASS: legacy configuration infers numbering and preserves existing names")
+
+        // Reserve a manual name without saving a draft: an abandoned number stays consumed.
+        let manualName = try store.reserveNextLightName()
+        precondition(manualName == "Light 8")
+        let discovered = [
+            DiscoveredWiZLight(macAddress: "aabbccddee02", ipAddress: "192.0.2.12",
+                               deviceInfo: WiZDeviceInfo(moduleName: "ESP25_SHRGB_01")),
+            DiscoveredWiZLight(macAddress: "aabbccddee01", ipAddress: "192.0.2.11",
+                               deviceInfo: WiZDeviceInfo())
+        ]
+        _ = try store.applyDiscoveryResults(discovered)
+        precondition(store.configuration.lights.suffix(2).map(\.name) == ["Light 9", "Light 10"])
+        precondition(store.configuration.lights.last?.deviceInfo?.moduleName == "ESP25_SHRGB_01")
+        precondition(store.configuration.nextLightNumber == 11)
+        _ = try store.applyDiscoveryResults(discovered.reversed())
+        precondition(store.configuration.nextLightNumber == 11 && store.configuration.lights.count == 5)
+        print("PASS: manual and discovered lights share a sequence ordered by MAC, not response order")
+
+        var changed = store.configuration.lights
+        changed[3].name = "Kitchen"
+        changed.removeLast()
+        try store.save(displayID: 3, lights: changed)
+        let reloaded = ConfigurationStore(defaults: defaults)
+        let afterReload = try reloaded.reserveNextLightName()
+        precondition(afterReload == "Light 11")
+        var collision = reloaded.configuration.lights
+        collision[0].name = "Light 12"
+        try reloaded.save(displayID: 3, lights: collision)
+        let afterCollision = try reloaded.reserveNextLightName()
+        precondition(afterCollision == "Light 13")
+        let counter = reloaded.configuration.nextLightNumber
+        do {
+            _ = try reloaded.applyDiscoveryResults([
+                discovered[0],
+                DiscoveredWiZLight(macAddress: "aabbccddee03", ipAddress: discovered[0].ipAddress,
+                                   deviceInfo: WiZDeviceInfo())
+            ])
+            preconditionFailure("Conflicting discovery should fail")
+        } catch ConfigurationError.conflictingDiscoveryIPAddress { }
+        precondition(reloaded.configuration.nextLightNumber == counter)
+        precondition(ConfigurationStore(defaults: defaults).configuration.nextLightNumber == counter)
+        print("PASS: rename, deletion and restart preserve numbering; collisions skip and failed discovery consumes nothing")
+    }
+
 }
