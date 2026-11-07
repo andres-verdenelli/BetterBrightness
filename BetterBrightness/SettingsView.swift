@@ -18,7 +18,6 @@ struct SettingsView: View {
     @State private var showsDeleteConfirmation = false
     @State private var renamingLightID: UUID?
     @State private var renameText = ""
-    @FocusState private var renameFocus: UUID?
     @FocusState private var advancedField: AdvancedField?
 
     private enum AdvancedField: Hashable {
@@ -51,9 +50,7 @@ struct SettingsView: View {
                         if let light = lights.first(where: { $0.id == id }) {
                             sidebarRow(light)
                                 .tag(id)
-                                .onTapGesture(count: 2) { beginRename(id) }
                                 .contextMenu {
-                                    Button("Rename") { beginRename(id) }
                                     Button("Remove Light…", role: .destructive) {
                                         requestRemoval(light)
                                     }
@@ -69,6 +66,11 @@ struct SettingsView: View {
                let index = lights.firstIndex(where: { $0.id == id }) {
                 LightDetailView(
                     light: $lights[index],
+                    isRenaming: renamingLightID == id,
+                    renameText: $renameText,
+                    onBeginRename: { beginRename(id) },
+                    onFinishRename: finishRename,
+                    onCancelRename: cancelRename,
                     onCommit: {
                         // A selection change has already committed the previous draft.
                         guard selectedLightID == id else { return }
@@ -119,11 +121,6 @@ struct SettingsView: View {
         .onReceive(configurationStore.$configuration) { configuration in
             mergeDiscoveryChangesIntoDrafts(configuration)
         }
-        .onChange(of: renameFocus) { previous, current in
-            if let previous, previous != current, previous == renamingLightID {
-                finishRename()
-            }
-        }
         .sheet(isPresented: $showsAdvanced) {
             advancedSettings
         }
@@ -157,26 +154,9 @@ struct SettingsView: View {
             Image(systemName: light.isIPAddressVerified ? "lightbulb" : "exclamationmark.triangle")
                 .foregroundStyle(light.isIPAddressVerified ? Color.secondary : Color.orange)
             VStack(alignment: .leading, spacing: 4) {
-                if renamingLightID == light.id {
-                    TextField("Light name", text: $renameText)
-                        .textFieldStyle(.plain)
-                        .foregroundStyle(Color(nsColor: .textColor))
-                        .tint(Color(nsColor: .controlAccentColor))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(
-                            Color(nsColor: .textBackgroundColor),
-                            in: RoundedRectangle(cornerRadius: 4)
-                        )
-                        .focused($renameFocus, equals: light.id)
-                        .onSubmit(finishRename)
-                        .onExitCommand(perform: cancelRename)
-                        .onAppear { renameFocus = light.id }
-                } else {
-                    Text(light.displayName)
-                        .lineLimit(1)
-                        .help(light.displayName)
-                }
+                Text(light.displayName)
+                    .lineLimit(1)
+                    .help(light.displayName)
                 if !light.isIPAddressVerified {
                     Text("Waiting for rediscovery")
                         .font(.caption)
@@ -215,14 +195,12 @@ struct SettingsView: View {
               let index = lights.firstIndex(where: { $0.id == id }) else { return }
         lights[index].name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
         renamingLightID = nil
-        renameFocus = nil
         // A manually added light can be named before its IP address is entered.
         if !lights[index].ip.isEmpty { saveConfiguration() }
     }
 
     private func cancelRename() {
         renamingLightID = nil
-        renameFocus = nil
     }
 
     private var advancedSettings: some View {
@@ -565,7 +543,13 @@ private struct SettingsWindowSupport: NSViewRepresentable {
 
 private struct LightDetailView: View {
     @Binding var light: LightDraft
+    let isRenaming: Bool
+    @Binding var renameText: String
+    let onBeginRename: () -> Void
+    let onFinishRename: () -> Void
+    let onCancelRename: () -> Void
     let onCommit: () -> Void
+    @FocusState private var isNameFocused: Bool
     @FocusState private var isIPFocused: Bool
 
     private let syncHelp = "When on, this light follows brightness changes from your selected BetterDisplay monitor. Turn it off to stop sending brightness updates to this light."
@@ -612,6 +596,9 @@ private struct LightDetailView: View {
             }
 
             Section("Light") {
+                LabeledContent("Name") {
+                    nameEditor.multilineTextAlignment(.trailing)
+                }
                 if light.macAddress == nil {
                     TextField("IP address", text: $light.ip)
                         .focused($isIPFocused)
@@ -627,8 +614,44 @@ private struct LightDetailView: View {
         }
         .formStyle(.grouped)
         .navigationTitle(light.displayName)
+        .onChange(of: isNameFocused) { wasFocused, focused in
+            if wasFocused && !focused && isRenaming { onFinishRename() }
+        }
         .onChange(of: isIPFocused) { previous, current in
             if previous && !current { onCommit() }
+        }
+    }
+
+    @ViewBuilder
+    private var nameEditor: some View {
+        if isRenaming {
+            TextField("Light name", text: $renameText)
+                .labelsHidden()
+                .textFieldStyle(.plain)
+                .focused($isNameFocused)
+                .onSubmit(onFinishRename)
+                .onExitCommand(perform: onCancelRename)
+                .onKeyPress(.escape) {
+                    onCancelRename()
+                    return .handled
+                }
+                .onAppear {
+                    DispatchQueue.main.async { isNameFocused = true }
+                }
+                .accessibilityLabel("Light name")
+        } else {
+            Button(action: onBeginRename) {
+                HStack(spacing: 6) {
+                    Text(light.displayName).lineLimit(1)
+                    Image(systemName: "pencil")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Rename light")
+            .accessibilityLabel("Rename \(light.displayName)")
         }
     }
 

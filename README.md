@@ -101,7 +101,7 @@ This prints the resulting app's temporary path. Both modes record the source com
 2. Open **Settings**.
 3. Open **Advanced Settings** with the gear button and confirm the BetterDisplay display ID for the monitor you want to follow.
 4. Select **Discover Lights** from the menu bar while the Mac and lights are on the same network. Its results show the lights found and IP addresses updated.
-5. Select each discovered light in Settings and enable **Sync brightness** for each light you want to control. Double-click its name in the sidebar, or right-click and choose **Rename**, to rename it. Right-click also provides **Remove Light**.
+5. Select each discovered light in Settings and enable **Sync brightness** for each light you want to control. Edit **Name** in the selected light’s **Light** section, beside its IP and MAC addresses, to rename it. Press Return or leave the field to save; Escape cancels. Right-click in the sidebar provides **Remove Light**.
 6. Drag the two handles on the Monitor or Light slider to choose its range. The minimum and maximum percentages appear at the left and right; changes save when you finish dragging. Hover over or click **?** for an explanation. The gear button opens Advanced Settings, including the BetterDisplay display ID.
 
 Newly discovered lights remain disabled until you explicitly enable them.
