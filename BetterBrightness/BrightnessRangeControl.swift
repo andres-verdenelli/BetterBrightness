@@ -1,158 +1,111 @@
-import AppKit
 import SwiftUI
 
-/// Two native slider thumbs sharing one track and one percentage scale.
-struct BrightnessRangeControl: NSViewRepresentable {
-    @Binding var minimum: Int
-    @Binding var maximum: Int
-    let domain: ClosedRange<Int>
-    let title: String
+/// One shared constraint for typed values and steppers.
+func boundedBrightness(_ value: Int, lower: Int, upper: Int) -> Int {
+    min(max(value, lower), upper)
+}
+
+struct FollowBrightnessEditor: View {
+    @Binding var monitorMin: Int
+    @Binding var monitorMax: Int
+    @Binding var lightMin: Int
+    @Binding var lightMax: Int
     let onCommit: () -> Void
 
-    func makeNSView(context: Context) -> RangeSliderView {
-        RangeSliderView()
+    private var dimMonitor: Binding<Int> {
+        Binding(get: { monitorMin }, set: { monitorMin = boundedBrightness($0, lower: 0, upper: monitorMax - 1) })
+    }
+    private var brightMonitor: Binding<Int> {
+        Binding(get: { monitorMax }, set: { monitorMax = boundedBrightness($0, lower: monitorMin + 1, upper: 100) })
+    }
+    private var dimLight: Binding<Int> {
+        Binding(get: { lightMin }, set: { lightMin = boundedBrightness($0, lower: 1, upper: lightMax - 1) })
+    }
+    private var brightLight: Binding<Int> {
+        Binding(get: { lightMax }, set: { lightMax = boundedBrightness($0, lower: lightMin + 1, upper: 100) })
     }
 
-    func updateNSView(_ view: RangeSliderView, context: Context) {
-        view.configure(minimum: minimum, maximum: maximum, domain: domain, title: title)
-        view.onChange = { lower, upper in
-            minimum = lower
-            maximum = upper
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            situation("Dim light", monitor: dimMonitor, light: dimLight)
+            Divider()
+            situation("Bright light", monitor: brightMonitor, light: brightLight)
+            Text("The light increases gradually between these points and stays at its dim or bright limit outside them.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
         }
-        view.onCommit = onCommit
+        .padding(.vertical, 6)
     }
-}
 
-final class RangeSliderView: NSView {
-    let minimumSlider = RangeThumbSlider(frame: .zero)
-    let maximumSlider = RangeThumbSlider(frame: .zero)
-    var onChange: ((Int, Int) -> Void)?
-    var onCommit: (() -> Void)?
-    private var isTracking = false
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        for slider in [minimumSlider, maximumSlider] {
-            slider.cell = RangeThumbCell()
-            slider.sliderType = .linear
-            slider.isVertical = false
-            slider.numberOfTickMarks = 0
-            slider.isContinuous = true
-            slider.target = self
-            slider.action = #selector(valueChanged(_:))
-            slider.onBeginEditing = { [weak self] in self?.isTracking = true }
-            slider.onEndEditing = { [weak self] in
-                self?.isTracking = false
-                self?.onCommit?()
+    private func situation(_ title: String, monitor: Binding<Int>, light: Binding<Int>) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.headline)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 6) {
+                    monitorPhrase(title, value: monitor)
+                    lightPhrase(title, value: light)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    monitorPhrase(title, value: monitor)
+                    lightPhrase(title, value: light)
+                }
             }
-            addSubview(slider)
         }
     }
 
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    func configure(minimum: Int, maximum: Int, domain: ClosedRange<Int>, title: String) {
-        for slider in [minimumSlider, maximumSlider] {
-            slider.minValue = Double(domain.lowerBound)
-            slider.maxValue = Double(domain.upperBound)
+    private func monitorPhrase(_ title: String, value: Binding<Int>) -> some View {
+        HStack(spacing: 4) {
+            Text("When the monitor reaches")
+            PercentageEditor(value: value, title: "\(title) monitor brightness", onCommit: onCommit)
         }
-        minimumSlider.doubleValue = Double(minimum)
-        maximumSlider.doubleValue = Double(maximum)
-        minimumSlider.setAccessibilityLabel("\(title) minimum")
-        maximumSlider.setAccessibilityLabel("\(title) maximum")
-        updateAccessibilityValues()
-        needsDisplay = true
     }
 
-    override func layout() {
-        super.layout()
-        minimumSlider.frame = bounds
-        maximumSlider.frame = bounds
-        needsDisplay = true
-    }
-
-    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 28) }
-
-    private func knobRect(for slider: NSSlider) -> NSRect {
-        (slider.cell as? NSSliderCell)?.knobRect(flipped: slider.isFlipped) ?? .zero
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let local = convert(point, from: superview)
-        guard bounds.contains(local) else { return nil }
-        let minimumDistance = abs(local.x - knobRect(for: minimumSlider).midX)
-        let maximumDistance = abs(local.x - knobRect(for: maximumSlider).midX)
-        // Choosing the nearest thumb also keeps tightly spaced endpoints reachable.
-        return minimumDistance <= maximumDistance ? minimumSlider : maximumSlider
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        super.draw(dirtyRect)
-        guard let cell = minimumSlider.cell as? NSSliderCell else { return }
-        let bar = cell.barRect(flipped: minimumSlider.isFlipped)
-        NSColor.quaternaryLabelColor.setFill()
-        NSBezierPath(roundedRect: bar, xRadius: bar.height / 2, yRadius: bar.height / 2).fill()
-        let lower = knobRect(for: minimumSlider).midX
-        let upper = knobRect(for: maximumSlider).midX
-        let selection = NSRect(x: lower, y: bar.minY, width: max(0, upper - lower), height: bar.height)
-        NSColor.controlAccentColor.setFill()
-        NSBezierPath(roundedRect: selection, xRadius: bar.height / 2, yRadius: bar.height / 2).fill()
-    }
-
-    @objc private func valueChanged(_ sender: NSSlider) {
-        if sender === minimumSlider {
-            minimumSlider.doubleValue = min(
-                max(sender.doubleValue.rounded(), sender.minValue),
-                maximumSlider.doubleValue - 1
-            )
-        } else {
-            maximumSlider.doubleValue = max(
-                min(sender.doubleValue.rounded(), sender.maxValue),
-                minimumSlider.doubleValue + 1
-            )
+    private func lightPhrase(_ title: String, value: Binding<Int>) -> some View {
+        HStack(spacing: 4) {
+            Text("set the light to")
+            PercentageEditor(value: value, title: "\(title) light brightness", onCommit: onCommit)
         }
-        updateAccessibilityValues()
-        needsDisplay = true
-        onChange?(Int(minimumSlider.doubleValue), Int(maximumSlider.doubleValue))
-        if !isTracking { onCommit?() }
     }
 
-    private func updateAccessibilityValues() {
-        minimumSlider.setAccessibilityValueDescription("\(Int(minimumSlider.doubleValue)) percent")
-        maximumSlider.setAccessibilityValueDescription("\(Int(maximumSlider.doubleValue)) percent")
-    }
 }
 
-private final class RangeThumbCell: NSSliderCell {
-    override func drawBar(inside rect: NSRect, flipped: Bool) {
-        // The containing view draws the single shared track.
-    }
-}
+private struct PercentageEditor: View {
+    @Binding var value: Int
+    let title: String
+    let onCommit: () -> Void
+    @State private var text = ""
+    @FocusState private var focused: Bool
 
-final class RangeThumbSlider: NSSlider {
-    var onBeginEditing: (() -> Void)?
-    var onEndEditing: (() -> Void)?
-
-    override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
-        onBeginEditing?()
-        super.mouseDown(with: event)
-        onEndEditing?()
-    }
-
-    override func keyDown(with event: NSEvent) {
-        switch event.keyCode {
-        case 123, 125: adjust(by: -1)
-        case 124, 126: adjust(by: 1)
-        default: super.keyDown(with: event)
+    var body: some View {
+        HStack(spacing: 2) {
+            TextField(title, text: $text)
+                .labelsHidden().textFieldStyle(.roundedBorder)
+                .multilineTextAlignment(.trailing).frame(width: 40)
+                .focused($focused).onSubmit(commit)
+                .onChange(of: focused) { wasFocused, isFocused in
+                    if wasFocused && !isFocused { commit() }
+                }
+                .onKeyPress(.upArrow) { adjust(1); return .handled }
+                .onKeyPress(.downArrow) { adjust(-1); return .handled }
+            Text("%")
+            Stepper(title, onIncrement: { adjust(1) }, onDecrement: { adjust(-1) })
+                .labelsHidden().fixedSize()
         }
+        .monospacedDigit()
+        .onAppear { text = String(value) }
+        .onChange(of: value) { _, newValue in text = String(newValue) }
     }
 
-    override func accessibilityPerformIncrement() -> Bool { adjust(by: 1); return true }
-    override func accessibilityPerformDecrement() -> Bool { adjust(by: -1); return true }
+    private func commit() {
+        if let number = Int(text.trimmingCharacters(in: .whitespaces)) { value = number }
+        text = String(value)
+        onCommit()
+    }
 
-    private func adjust(by delta: Int) {
-        doubleValue = min(max(doubleValue + Double(delta), minValue), maxValue)
-        sendAction(action, to: target)
+    private func adjust(_ delta: Int) {
+        value += delta
+        text = String(value)
+        onCommit()
     }
 }

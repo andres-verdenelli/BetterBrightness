@@ -545,7 +545,7 @@ private struct LightDetailView: View {
     private let syncHelp = "When on, this light follows brightness changes from your selected BetterDisplay monitor. Turn it off to stop sending brightness updates to this light."
 
     private var mappingHelp: String {
-        "Monitor chooses the brightness range that controls this light. Light chooses how dim and how bright the light can get. These controls do not change your monitor's brightness.\n\n"
+        "Edit the percentages in Dim light and Bright light. Use Tab to reach each percentage; type a value and press Return, or use the stepper to adjust by 1%. Minimum and maximum values stay at least 1 percentage point apart. These controls do not change your monitor's brightness.\n\n"
             + "With your current settings:\n"
             + "• At \(light.monitorMin)% monitor brightness, the light is set to \(light.lightMinPercent)%.\n"
             + "• At \(light.monitorMax)% monitor brightness, the light is set to \(light.lightMaxPercent)%.\n\n"
@@ -573,15 +573,16 @@ private struct LightDetailView: View {
             }
 
             Section {
-                rangeRow("Monitor", minimum: $light.monitorMin,
-                         maximum: $light.monitorMax, domain: 0...100)
-                rangeRow("Light", minimum: $light.lightMinPercent,
-                         maximum: $light.lightMaxPercent, domain: 1...100)
+                FollowBrightnessEditor(
+                    monitorMin: $light.monitorMin, monitorMax: $light.monitorMax,
+                    lightMin: $light.lightMinPercent, lightMax: $light.lightMaxPercent,
+                    onCommit: onCommit
+                )
             } header: {
                 HStack {
-                    Text("Brightness mapping")
+                    Text("Follow monitor brightness")
                     Spacer()
-                    SettingsHelpButton(title: "Brightness mapping", explanation: mappingHelp)
+                    SettingsHelpButton(title: "Follow monitor brightness", explanation: mappingHelp)
                 }
             }
 
@@ -635,30 +636,7 @@ private struct LightDetailView: View {
         }
     }
 
-    private func rangeRow(
-        _ title: String, minimum: Binding<Int>, maximum: Binding<Int>,
-        domain: ClosedRange<Int>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.subheadline.weight(.medium))
-            HStack(spacing: 12) {
-                Text("\(minimum.wrappedValue)%")
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .leading)
-                    .accessibilityLabel("\(title) minimum: \(minimum.wrappedValue) percent")
-                BrightnessRangeControl(minimum: minimum, maximum: maximum,
-                                       domain: domain, title: title, onCommit: onCommit)
-                    .frame(height: 28)
-                Text("\(maximum.wrappedValue)%")
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .trailing)
-                    .accessibilityLabel("\(title) maximum: \(maximum.wrappedValue) percent")
-            }
-        }
-        .padding(.vertical, 4)
-    }
+
 }
 
 private struct SettingsHelpButton: View {

@@ -102,7 +102,7 @@ This prints the resulting app's temporary path. Both modes record the source com
 3. Open **Advanced Settings** with the gear button and confirm the BetterDisplay display ID for the monitor you want to follow.
 4. Select **Discover Lights** from the menu bar while the Mac and lights are on the same network. Its results show the lights found and IP addresses updated.
 5. Select each discovered light in Settings and enable **Sync brightness** for each light you want to control. Edit **Name** in the selected light’s **Light** section, beside its IP and MAC addresses, to rename it. Press Return or leave the field to save; Escape cancels. Right-click in the sidebar provides **Remove Light**.
-6. Drag the two handles on the Monitor or Light slider to choose its range. The minimum and maximum percentages appear at the left and right; changes save when you finish dragging. Hover over or click **?** for an explanation. The gear button opens Advanced Settings, including the BetterDisplay display ID.
+6. Edit the monitor and light percentages under **Dim light** and **Bright light**. Press Return or leave a field to save; use the steppers for 1% adjustments. Hover over or click **?** for an explanation. The gear button opens Advanced Settings, including the BetterDisplay display ID.
 
 Newly discovered lights remain disabled until you explicitly enable them. Lights are added only when they respond to a Discovery broadcast; manual entry by IP is not available. New discoveries receive numbered names (`Light 1`, `Light 2`, and so on) from a saved sequence. Existing names are preserved, and numbers are not reused after renaming or removal. A new installation starts with no lights. IP and MAC addresses in Settings are read-only and updated by Discovery.
 
@@ -116,14 +116,11 @@ Use a signed build installed in `/Applications` for the real login test. Verify 
 
 ## Brightness mapping
 
-Each light has two ranges:
+Each light’s **Follow monitor brightness** section describes two situations: **Dim light** and **Bright light**. For example: “When the monitor reaches 40%, set the light to 1%” and “When the monitor reaches 80%, set the light to 100%.” Existing saved values are preserved.
 
-- **Monitor minimum and maximum** define the input range.
-- **Light minimum and maximum** define the visible output range.
+Edit the four percentages directly (Return or leaving a field confirms), use their steppers, or focus a field and press Up/Down to adjust by 1%. All values can also be adjusted with the keyboard using Tab and the percentage fields.
 
-For example, a monitor range of 40%–80% mapped to a light range of 10%–90% produces 10% light brightness at the monitor minimum, 90% at the monitor maximum, and proportional values in between. Values outside the monitor range remain at the nearest light limit.
-
-BetterBrightness presents light brightness as 1%–100%. The WiZ protocol conversion is handled internally.
+The light changes linearly between the two points and stays at the nearest light limit outside that interval. Monitor and light endpoints remain at least 1 percentage point apart; light brightness cannot go below 1%. These controls do not change the monitor’s brightness. The WiZ protocol conversion is handled internally.
 
 ## Discovery settings
 
