@@ -81,6 +81,101 @@ struct DiscoveryControllerTests {
         precondition(store.configuration.lights.first?.ip == "192.0.2.20")
         print("PASS: save failures surface without partially applying discovery")
 
+        try testDiscoveryOnly()
+        try testNumberedNames()
         try LightDraftTests.run()
     }
+    @MainActor
+    private static func testDiscoveryOnly() throws {
+        let suite = "BetterBrightness.DiscoveryOnlyTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = ConfigurationStore(defaults: defaults)
+        precondition(store.configuration.lights.isEmpty && store.configuration.nextLightNumber == 1)
+        try store.save(displayID: 5, lights: [], discovery: .standard)
+        precondition(ConfigurationStore(defaults: defaults).configuration.monitor.displayID == 5)
+        _ = try store.applyDiscoveryResults([])
+        precondition(store.configuration.lights.isEmpty && store.configuration.nextLightNumber == 1)
+        let reply = DiscoveredWiZLight(macAddress: "aabbccddeeff", ipAddress: "192.0.2.10",
+                                      deviceInfo: WiZDeviceInfo())
+        _ = try store.applyDiscoveryResults([reply])
+        precondition(store.configuration.lights.count == 1)
+        precondition(store.configuration.lights[0].name == "Light 1")
+        precondition(store.configuration.lights[0].macAddress == reply.macAddress)
+        precondition(!store.configuration.lights[0].isEnabled)
+        try store.save(displayID: 5, lights: [])
+        let reloaded = ConfigurationStore(defaults: defaults)
+        precondition(reloaded.configuration.lights.isEmpty && reloaded.configuration.nextLightNumber == 2)
+        _ = try reloaded.applyDiscoveryResults([reply])
+        precondition(reloaded.configuration.lights[0].name == "Light 2")
+        print("PASS: fresh installation and zero replies add no lights; settings and last-light removal support an empty list")
+    }
+
+    @MainActor
+    private static func testNumberedNames() throws {
+        let suite = "BetterBrightness.NumberingTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        func light(_ name: String, _ ip: String) -> LightConfiguration {
+            LightConfiguration(name: name, ip: ip, isEnabled: false,
+                mapping: BrightnessMapping(monitorMin: 40, monitorMax: 80,
+                                          lightMinPercent: 1, lightMaxPercent: 100))
+        }
+        let legacy = AppConfiguration(monitor: MonitorConfiguration(displayID: 3), lights: [
+            light("Desk", "192.0.2.1"), light("ESP25_SHRGB_01", "192.0.2.2"),
+            light("Light 7", "192.0.2.3")
+        ])
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as! [String: Any]
+        json.removeValue(forKey: "nextLightNumber")
+        defaults.set(try JSONSerialization.data(withJSONObject: json), forKey: "betterBrightness.configuration")
+        let store = ConfigurationStore(defaults: defaults)
+        precondition(store.configuration.nextLightNumber == 8)
+        precondition(store.configuration.lights.map(\.name) == ["Desk", "ESP25_SHRGB_01", "Light 7"])
+        let empty = AppConfiguration(monitor: MonitorConfiguration(displayID: 3), lights: [])
+        precondition(empty.nextLightNumber == 1)
+        print("PASS: legacy configuration infers numbering and preserves existing names")
+
+        let discovered = [
+            DiscoveredWiZLight(macAddress: "aabbccddee02", ipAddress: "192.0.2.12",
+                               deviceInfo: WiZDeviceInfo(moduleName: "ESP25_SHRGB_01")),
+            DiscoveredWiZLight(macAddress: "aabbccddee01", ipAddress: "192.0.2.11",
+                               deviceInfo: WiZDeviceInfo())
+        ]
+        _ = try store.applyDiscoveryResults(discovered)
+        precondition(store.configuration.lights.suffix(2).map(\.name) == ["Light 8", "Light 9"])
+        precondition(store.configuration.lights.last?.deviceInfo?.moduleName == "ESP25_SHRGB_01")
+        precondition(store.configuration.nextLightNumber == 10)
+        _ = try store.applyDiscoveryResults(discovered.reversed())
+        precondition(store.configuration.nextLightNumber == 10 && store.configuration.lights.count == 5)
+        print("PASS: discoveries receive sequential names ordered by MAC, not response order")
+
+        var changed = store.configuration.lights
+        changed[3].name = "Kitchen"
+        changed.removeLast()
+        try store.save(displayID: 3, lights: changed)
+        let reloaded = ConfigurationStore(defaults: defaults)
+        _ = try reloaded.applyDiscoveryResults([discovered[0]])
+        precondition(reloaded.configuration.lights.last?.name == "Light 10")
+        var collision = reloaded.configuration.lights
+        collision[0].name = "Light 12"
+        try reloaded.save(displayID: 3, lights: collision)
+        _ = try reloaded.applyDiscoveryResults([
+            DiscoveredWiZLight(macAddress: "aabbccddee03", ipAddress: "192.0.2.13",
+                               deviceInfo: WiZDeviceInfo())
+        ])
+        precondition(reloaded.configuration.lights.last?.name == "Light 13")
+        let counter = reloaded.configuration.nextLightNumber
+        do {
+            _ = try reloaded.applyDiscoveryResults([
+                discovered[0],
+                DiscoveredWiZLight(macAddress: "aabbccddee03", ipAddress: discovered[0].ipAddress,
+                                   deviceInfo: WiZDeviceInfo())
+            ])
+            preconditionFailure("Conflicting discovery should fail")
+        } catch ConfigurationError.conflictingDiscoveryIPAddress { }
+        precondition(reloaded.configuration.nextLightNumber == counter)
+        precondition(ConfigurationStore(defaults: defaults).configuration.nextLightNumber == counter)
+        print("PASS: rename, deletion and restart preserve numbering; collisions skip and failed discovery consumes nothing")
+    }
+
 }

@@ -14,21 +14,25 @@ struct AppConfiguration: Codable {
     let monitor: MonitorConfiguration
     let lights: [LightConfiguration]
     let discovery: DiscoveryConfiguration
+    let nextLightNumber: Int
 
     init(
         monitor: MonitorConfiguration,
         lights: [LightConfiguration],
-        discovery: DiscoveryConfiguration = .standard
+        discovery: DiscoveryConfiguration = .standard,
+        nextLightNumber: Int? = nil
     ) {
         self.monitor = monitor
         self.lights = lights
         self.discovery = discovery
+        self.nextLightNumber = max(nextLightNumber ?? 1, Self.inferredNextLightNumber(lights))
     }
 
     private enum CodingKeys: String, CodingKey {
         case monitor
         case lights
         case discovery
+        case nextLightNumber
     }
 
     init(from decoder: Decoder) throws {
@@ -39,26 +43,26 @@ struct AppConfiguration: Codable {
             DiscoveryConfiguration.self,
             forKey: .discovery
         ) ?? .standard
+        nextLightNumber = max(
+            try container.decodeIfPresent(Int.self, forKey: .nextLightNumber) ?? 1,
+            Self.inferredNextLightNumber(lights)
+        )
+    }
+
+    private static func inferredNextLightNumber(_ lights: [LightConfiguration]) -> Int {
+        lights.reduce(1) { next, light in
+            let name = light.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard name.hasPrefix("Light "),
+                  let number = Int(name.dropFirst(6)), number > 0,
+                  name == "Light \(number)" else { return next }
+            return max(next, number == Int.max ? Int.max : number + 1)
+        }
     }
 
     // Built-in defaults. Saved settings replace these values after the first save.
     static let current = AppConfiguration(
         monitor: MonitorConfiguration(displayID: 3),
-        lights: [
-            LightConfiguration(
-                id: UUID(),
-                name: "Light 1",
-                ip: "192.168.1.2",
-                isEnabled: false,
-                port: 38899,
-                mapping: BrightnessMapping(
-                    monitorMin: 40,
-                    monitorMax: 80,
-                    lightMinPercent: 1,
-                    lightMaxPercent: 100
-                )
-            ),
-        ]
+        lights: []
     )
 }
 

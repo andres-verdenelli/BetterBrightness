@@ -4,7 +4,7 @@ import Network
 
 enum ConfigurationError: LocalizedError {
     case invalidDisplayID
-    case noLights
+    case lightNumberExhausted
     case invalidIPAddress(String)
     case invalidMACAddress(String)
     case duplicateIPAddress(String)
@@ -19,8 +19,8 @@ enum ConfigurationError: LocalizedError {
         switch self {
         case .invalidDisplayID:
             return "The monitor ID must be greater than zero."
-        case .noLights:
-            return "Add at least one WiZ light."
+        case .lightNumberExhausted:
+            return "No more default light numbers are available."
         case .invalidIPAddress(let ip):
             return "\(ip.isEmpty ? "One light" : ip) is not a valid IPv4 address."
         case .invalidMACAddress(let macAddress):
@@ -75,9 +75,6 @@ final class ConfigurationStore: ObservableObject {
     ) throws {
         guard displayID > 0 else {
             throw ConfigurationError.invalidDisplayID
-        }
-        guard !lights.isEmpty else {
-            throw ConfigurationError.noLights
         }
 
         let discovery = discovery ?? configuration.discovery
@@ -169,7 +166,8 @@ final class ConfigurationStore: ObservableObject {
         let newConfiguration = AppConfiguration(
             monitor: MonitorConfiguration(displayID: displayID),
             lights: normalizedLights,
-            discovery: discovery
+            discovery: discovery,
+            nextLightNumber: configuration.nextLightNumber
         )
         try persist(newConfiguration)
     }
@@ -178,6 +176,7 @@ final class ConfigurationStore: ObservableObject {
         _ discoveredLights: [DiscoveredWiZLight]
     ) throws -> DiscoveryMergeSummary {
         var lights = configuration.lights
+        var nextLightNumber = configuration.nextLightNumber
         var newLightCount = 0
         var updatedIPCount = 0
         var identifiedExistingLightCount = 0
@@ -199,7 +198,7 @@ final class ConfigurationStore: ObservableObject {
                 discoveredLight.macAddress
         }
 
-        for discoveredLight in discoveredLights {
+        for discoveredLight in discoveredLights.sorted(by: { $0.macAddress < $1.macAddress }) {
             if let index = lights.firstIndex(where: { light in
                 light.macAddress.flatMap(WiZMACAddress.normalized) ==
                     discoveredLight.macAddress
@@ -224,9 +223,12 @@ final class ConfigurationStore: ObservableObject {
                 continue
             }
 
+            guard nextLightNumber < Int.max else { throw ConfigurationError.lightNumberExhausted }
+            let name = "Light \(nextLightNumber)"
+            nextLightNumber += 1
             lights.append(
                 LightConfiguration(
-                    name: discoveredLight.deviceInfo.moduleName ?? "WiZ Light",
+                    name: name,
                     macAddress: discoveredLight.macAddress,
                     ip: discoveredLight.ipAddress,
                     isIPAddressVerified: true,
@@ -268,7 +270,8 @@ final class ConfigurationStore: ObservableObject {
         let newConfiguration = AppConfiguration(
             monitor: configuration.monitor,
             lights: lights,
-            discovery: configuration.discovery
+            discovery: configuration.discovery,
+            nextLightNumber: nextLightNumber
         )
         try persist(newConfiguration)
 
@@ -300,7 +303,8 @@ final class ConfigurationStore: ObservableObject {
         return AppConfiguration(
             monitor: configuration.monitor,
             lights: lights,
-            discovery: configuration.discovery
+            discovery: configuration.discovery,
+            nextLightNumber: configuration.nextLightNumber
         )
     }
 
