@@ -181,12 +181,28 @@ final class ConfigurationStore: ObservableObject {
                         lightMinPercent: light.mapping.lightMinPercent,
                         lightMaxPercent: light.mapping.lightMaxPercent
                     ),
-                    deviceInfo: light.deviceInfo
+                    deviceInfo: light.deviceInfo,
+                    brightnessOffset: light.isHidden ? 0 : min(30, max(-30, light.brightnessOffset)),
+                    showInMenu: !light.isHidden && light.showInMenu
                 )
             )
         }
 
-        let groups = try validatedGroups(groups ?? configuration.groups, lights: normalizedLights)
+        var groups = try validatedGroups(groups ?? configuration.groups, lights: normalizedLights)
+        for g in groups.indices {
+            groups[g].brightnessOffset = min(30, max(-30, groups[g].brightnessOffset))
+            if !groups[g].showInMenu && configuration.groups.first(where: { $0.id == groups[g].id })?.showInMenu == true {
+                groups[g].brightnessOffset = 0
+            }
+        }
+        for i in normalizedLights.indices {
+            if groups.contains(where: { $0.memberIDs.contains(normalizedLights[i].id) }) {
+                normalizedLights[i].showInMenu = false
+                normalizedLights[i].brightnessOffset = 0
+            } else if !normalizedLights[i].showInMenu && configuration.lights.first(where: { $0.id == normalizedLights[i].id })?.showInMenu == true {
+                normalizedLights[i].brightnessOffset = 0
+            }
+        }
         let newConfiguration = AppConfiguration(
             monitor: MonitorConfiguration(displayID: displayID),
             lights: normalizedLights,
@@ -196,6 +212,20 @@ final class ConfigurationStore: ObservableObject {
             sidebarOrder: configuration.sidebarOrder
         )
         try persist(newConfiguration)
+    }
+
+    func setBrightnessOffset(_ offset: Int, for id: UUID) throws {
+        var lights = configuration.lights
+        var groups = configuration.groups
+        if let g = groups.firstIndex(where: { $0.id == id && $0.showInMenu }) {
+            groups[g].brightnessOffset = offset
+        } else if let i = lights.firstIndex(where: { $0.id == id && !$0.isHidden && $0.showInMenu }),
+                  configuration.group(containing: id) == nil {
+            lights[i].brightnessOffset = offset
+        } else {
+            throw ConfigurationError.invalidGroup("This menu destination is no longer available.")
+        }
+        try save(displayID: configuration.monitor.displayID, lights: lights, groups: groups)
     }
 
     func applyDiscoveryResults(
@@ -379,6 +409,8 @@ final class ConfigurationStore: ObservableObject {
             let id = lights[index].id
             if configuration.group(containing: id)?.id == destinationID { continue }
             if let previous = configuration.group(containing: id) {
+                lights[index].brightnessOffset = previous.brightnessOffset
+                lights[index].showInMenu = previous.showInMenu
                 lights[index].mapping = previous.mapping
                 lights[index].isEnabled = true
             }
@@ -427,6 +459,8 @@ final class ConfigurationStore: ObservableObject {
         var lights = configuration.lights
         var groups = configuration.groups
         if let group = configuration.group(containing: id) { lights[index].mapping = group.mapping }
+        lights[index].brightnessOffset = 0
+        lights[index].showInMenu = false
         lights[index].isHidden = hidden
         lights[index].isEnabled = false
         for g in groups.indices { groups[g].memberIDs.removeAll { $0 == id } }

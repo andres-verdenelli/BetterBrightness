@@ -7,6 +7,8 @@ struct SettingsView: View {
     @ObservedObject var discovery: DiscoveryController
     @ObservedObject var launchAtLogin: LaunchAtLoginController
 
+    private let previewMenu: (() -> Void)?
+
     @State private var displayIDText: String
     @State private var discoveryResponseWindowText: String
     @State private var discoveryAttemptCountText: String
@@ -35,7 +37,8 @@ struct SettingsView: View {
         case displayID, responseWindow, attempts
     }
 
-    init(configurationStore: ConfigurationStore, discovery: DiscoveryController, launchAtLogin: LaunchAtLoginController) {
+    init(configurationStore: ConfigurationStore, discovery: DiscoveryController, launchAtLogin: LaunchAtLoginController, previewMenu: (() -> Void)? = nil) {
+        self.previewMenu = previewMenu
         self.configurationStore = configurationStore
         self.discovery = discovery
         self.launchAtLogin = launchAtLogin
@@ -74,6 +77,10 @@ struct SettingsView: View {
                 .help(isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
             }
             ToolbarItemGroup {
+                if isGroupPreview, let previewMenu {
+                    Button("Preview Menu", systemImage: "sun.max") { previewMenu() }
+                        .help("Open the simulated menu · monitor brightness 60%")
+                }
                 Button("Advanced Settings", systemImage: "gearshape") {
                     finishRename()
                     guard saveConfiguration() else { return }
@@ -565,6 +572,7 @@ struct SettingsView: View {
             )
             return true
         } catch {
+            reloadSnapshot()
             errorMessage = error.localizedDescription
             showsError = true
             return false
@@ -679,6 +687,12 @@ struct SettingsView: View {
 
     private func mergeDiscoveryChangesIntoDrafts(_ configuration: AppConfiguration) {
         LightDraft.mergeDiscoveryChanges(configuration.lights, into: &lights)
+        for i in groups.indices {
+            if let saved = configuration.groups.first(where: { $0.id == groups[i].id }) {
+                groups[i].brightnessOffset = saved.brightnessOffset
+                groups[i].showInMenu = saved.showInMenu
+            }
+        }
     }
 
     private func requestRemoval(_ light: LightDraft) {
@@ -857,6 +871,14 @@ private struct LightDetailView: View {
             }
 
             Section {
+                Toggle("Show in menu", isOn: $light.showInMenu)
+                    .onChange(of: light.showInMenu) {
+                        if !light.showInMenu { light.brightnessOffset = 0 }
+                        onCommit()
+                    }
+            } footer: { Text("Adjust brightness by −30 to +30 points from the menu bar.") }
+
+            Section {
                 FollowBrightnessEditor(
                     monitorMin: $light.monitorMin, monitorMax: $light.monitorMax,
                     lightMin: $light.lightMinPercent, lightMax: $light.lightMaxPercent,
@@ -909,6 +931,13 @@ private struct GroupDetailView: View {
                 Toggle("Sync brightness", isOn: $group.isEnabled)
                     .toggleStyle(.switch).onChange(of: group.isEnabled) { onCommit() }
             }
+            Section {
+                Toggle("Show in menu", isOn: $group.showInMenu)
+                    .onChange(of: group.showInMenu) {
+                        if !group.showInMenu { group.brightnessOffset = 0 }
+                        onCommit()
+                    }
+            } footer: { Text("One shared brightness adjustment for every member.") }
             Section {
                 FollowBrightnessEditor(
                     monitorMin: value(\.monitorMin), monitorMax: value(\.monitorMax),

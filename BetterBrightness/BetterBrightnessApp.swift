@@ -5,6 +5,7 @@ import SwiftUI
 struct BetterBrightnessApp: App {
     @StateObject private var controller: BrightnessController
     private let isGroupPreview: Bool
+    private let statusMenu: BrightnessStatusMenu
 
     init() {
 #if DEBUG
@@ -28,39 +29,53 @@ struct BetterBrightnessApp: App {
                     try store.save(displayID: 3, lights: lights)
                     _ = try store.createGroup(name: "Living", memberIDs: [lights[0].id, lights[1].id, lights[2].id], sourceID: lights[0].id)
                     _ = try store.createGroup(name: "Office", memberIDs: [lights[3].id, lights[4].id], sourceID: lights[3].id)
+                    var demoLights = store.configuration.lights
+                    demoLights[5].showInMenu = true
+                    demoLights[5].isEnabled = true
+                    var demoGroups = store.configuration.groups
+                    demoGroups[0].showInMenu = true
+                    demoGroups[1].showInMenu = true
+                    try store.save(displayID: 3, lights: demoLights, groups: demoGroups)
                 }
                 catch { assertionFailure("Could not prepare preview: \(error)") }
             }
-            _controller = StateObject(wrappedValue: BrightnessController(configurationStore: store, startsServices: false))
+            let controller = BrightnessController(configurationStore: store, startsServices: false)
+            controller.sendBrightnessToEnabledLights(60)
+            _controller = StateObject(wrappedValue: controller)
+            statusMenu = BrightnessStatusMenu(controller: controller)
         } else {
-            _controller = StateObject(wrappedValue: BrightnessController())
+            let controller = BrightnessController()
+            _controller = StateObject(wrappedValue: controller)
+            statusMenu = BrightnessStatusMenu(controller: controller)
         }
     }
     @StateObject private var launchAtLogin = LaunchAtLoginController()
 
-    var body: some Scene {
-        MenuBarExtra {
-            MenuBarContent(controller: controller)
-        } label: {
-            Label(
-                "BetterBrightness",
-                systemImage: controller.isPaused
-                    ? "sun.max"
-                    : "sun.max.fill"
-            )
+    private var previewMenuAction: (() -> Void)? {
 #if DEBUG
-            .background { SettingsPreviewLauncher() }
+        isGroupPreview ? { statusMenu.showPreviewMenu() } : nil
+#else
+        nil
 #endif
-        }
-        .menuBarExtraStyle(.menu)
+    }
 
+    var body: some Scene {
+#if DEBUG
+        Window("BetterBrightness Preview", id: "preview-launcher") {
+            StartupSettingsLauncher().frame(width: 240, height: 100)
+        }
+        .defaultSize(width: 240, height: 100)
+        .defaultLaunchBehavior(ProcessInfo.processInfo.arguments.contains("--preview-settings") ? .presented : .suppressed)
+#endif
         Settings {
             SettingsView(
                 configurationStore: controller.configurationStore,
                 discovery: controller.discoveryController,
-                launchAtLogin: launchAtLogin
+                launchAtLogin: launchAtLogin,
+                previewMenu: previewMenuAction
             )
                 .environment(\.isGroupPreview, isGroupPreview)
+
                 .frame(minWidth: 740, minHeight: 560)
         }
         .defaultSize(width: 820, height: 640)
@@ -68,47 +83,22 @@ struct BetterBrightnessApp: App {
     }
 }
 
-#if DEBUG
-/// Allows an isolated UI preview to open Settings immediately after launch.
-private struct SettingsPreviewLauncher: View {
+private struct StartupSettingsLauncher: View {
     @Environment(\.openSettings) private var openSettings
-
+    @Environment(\.dismiss) private var dismiss
     var body: some View {
         Color.clear.task {
-            guard ProcessInfo.processInfo.arguments.contains("--preview-settings") else { return }
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            openSettings()
-        }
-    }
-}
-#endif
-
-private struct MenuBarContent: View {
-    @ObservedObject var controller: BrightnessController
-    @Environment(\.openSettings) private var openSettings
-
-    var body: some View {
-        Group {
-            Button(
-                controller.isPaused ? "Resume" : "Pause",
-                systemImage: controller.isPaused ? "play.fill" : "pause.fill"
-            ) {
-                controller.togglePause()
-            }
-
-            Divider()
-
-            Button("Settings…", systemImage: "gearshape") {
+#if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("--preview-settings") {
                 NSApplication.shared.activate(ignoringOtherApps: true)
                 openSettings()
             }
-
-            Button("Quit BetterBrightness", systemImage: "power") {
-                NSApplication.shared.terminate(nil)
-            }
+#endif
+            dismiss()
         }
     }
 }
+
 private struct GroupPreviewKey: EnvironmentKey {
     static let defaultValue = false
 }

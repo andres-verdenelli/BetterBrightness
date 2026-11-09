@@ -13,6 +13,7 @@ swiftc -sdk "$test_sdk" -parse-as-library \
   "$test_root/BetterBrightness/LightDraft.swift" \
   "$test_root/Tests/LightDraftTests.swift" \
   "$test_root/Tests/LightGroupTests.swift" \
+  "$test_root/Tests/MenuOffsetTests.swift" \
   "$test_root/Tests/DiscoveryControllerTests.swift" \
   -o "$test_output/DiscoveryControllerTests"
 "$test_output/DiscoveryControllerTests"

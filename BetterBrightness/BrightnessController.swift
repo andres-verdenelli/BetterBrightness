@@ -153,6 +153,8 @@ struct LightConfiguration: Codable, Identifiable {
     var port: UInt16
     var mapping: BrightnessMapping
     var deviceInfo: WiZDeviceInfo?
+    var brightnessOffset: Int
+    var showInMenu: Bool
 
     init(
         id: UUID = UUID(),
@@ -164,7 +166,9 @@ struct LightConfiguration: Codable, Identifiable {
         isHidden: Bool = false,
         port: UInt16 = 38899,
         mapping: BrightnessMapping,
-        deviceInfo: WiZDeviceInfo? = nil
+        deviceInfo: WiZDeviceInfo? = nil,
+        brightnessOffset: Int = 0,
+        showInMenu: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -176,6 +180,8 @@ struct LightConfiguration: Codable, Identifiable {
         self.port = port
         self.mapping = mapping
         self.deviceInfo = deviceInfo
+        self.brightnessOffset = min(30, max(-30, brightnessOffset))
+        self.showInMenu = showInMenu
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -189,6 +195,7 @@ struct LightConfiguration: Codable, Identifiable {
         case port
         case mapping
         case deviceInfo
+        case brightnessOffset, showInMenu
     }
 
     init(from decoder: Decoder) throws {
@@ -206,6 +213,8 @@ struct LightConfiguration: Codable, Identifiable {
         port = try container.decodeIfPresent(UInt16.self, forKey: .port) ?? 38899
         mapping = try container.decode(BrightnessMapping.self, forKey: .mapping)
         deviceInfo = try container.decodeIfPresent(WiZDeviceInfo.self, forKey: .deviceInfo)
+        brightnessOffset = min(30, max(-30, try container.decodeIfPresent(Int.self, forKey: .brightnessOffset) ?? 0))
+        showInMenu = try container.decodeIfPresent(Bool.self, forKey: .showInMenu) ?? false
     }
 
     var verifiedIPAddress: String? {
@@ -281,7 +290,11 @@ struct BrightnessMapping: Codable, Equatable {
         try container.encode(lightMaxPercent, forKey: .lightMaxPercent)
     }
 
-    func dimmingValue(for monitorBrightness: Double) -> Int {
+    func dimmingValue(for monitorBrightness: Double, offset: Int = 0) -> Int {
+        Self.protocolDimmingValue(forVisiblePercentage: visiblePercentage(for: monitorBrightness) + Double(offset))
+    }
+
+    func visiblePercentage(for monitorBrightness: Double) -> Double {
         guard
             monitorBrightness.isFinite,
             monitorMin.isFinite,
@@ -291,9 +304,7 @@ struct BrightnessMapping: Codable, Equatable {
             monitorMax > monitorMin,
             lightMaxPercent > lightMinPercent
         else {
-            return Self.protocolDimmingValue(
-                forVisiblePercentage: lightMinPercent
-            )
+            return lightMinPercent
         }
 
         let clampedMonitorBrightness = min(
@@ -307,9 +318,7 @@ struct BrightnessMapping: Codable, Equatable {
             normalizedMonitorBrightness *
             (lightMaxPercent - lightMinPercent)
 
-        return Self.protocolDimmingValue(
-            forVisiblePercentage: visibleLightBrightness
-        )
+        return visibleLightBrightness
     }
 
     static func protocolDimmingValue(
@@ -336,7 +345,21 @@ final class BrightnessController: ObservableObject {
     )
     private var notificationObserver: NSObjectProtocol?
     private var udpConnections: [UUID: NWConnection] = [:]
-    private var lastMonitorBrightness: Double?
+    @Published private(set) var lastMonitorBrightness: Double?
+    @Published private(set) var offsetSaveError: String?
+    private var snapshot: AppConfiguration
+    private var configurationSubscription: AnyCancellable?
+    private let now: () -> TimeInterval
+    private let schedule: (TimeInterval, @escaping () -> Void) -> (() -> Void)
+    private var savingOffset = false
+    private final class Adjustment {
+        var offset: Int
+        var lastSend: TimeInterval?
+        var sent: [UUID: Int] = [:]
+        var cancel: (() -> Void)?
+        init(offset: Int) { self.offset = offset }
+    }
+    private var adjustments: [UUID: Adjustment] = [:]
     private let permitsNetwork: Bool
     private let sendOverride: ((Int, LightConfiguration) -> Void)?
 
@@ -345,7 +368,16 @@ final class BrightnessController: ObservableObject {
     }
 
     init(configurationStore: ConfigurationStore, startsServices: Bool = true,
-         send: ((Int, LightConfiguration) -> Void)? = nil) {
+         send: ((Int, LightConfiguration) -> Void)? = nil,
+         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+         schedule: @escaping (TimeInterval, @escaping () -> Void) -> (() -> Void) = { delay, action in
+             let timer = Timer(timeInterval: delay, repeats: false) { _ in action() }
+             RunLoop.main.add(timer, forMode: .common)
+             return { timer.invalidate() }
+         }) {
+        snapshot = configurationStore.configuration
+        self.now = now
+        self.schedule = schedule
         permitsNetwork = startsServices
         sendOverride = send
         self.configurationStore = configurationStore
@@ -356,6 +388,9 @@ final class BrightnessController: ObservableObject {
                 completion(.success([]))
             }
         }
+        configurationSubscription = configurationStore.$configuration.dropFirst().sink { [weak self] next in
+            self?.configurationChanged(next)
+        }
         if startsServices {
             startListening()
             discoveryController.discoverLights()
@@ -365,7 +400,7 @@ final class BrightnessController: ObservableObject {
     }
 
     private var configuration: AppConfiguration {
-        configurationStore.configuration
+        snapshot
     }
 
     func togglePause() {
@@ -376,6 +411,7 @@ final class BrightnessController: ObservableObject {
         guard !isPaused else { return }
 
         isPaused = true
+        cancelAdjustments()
         cancelPendingUDPSends()
         statusText = "Sync paused"
         print("BetterBrightness paused")
@@ -435,8 +471,8 @@ final class BrightnessController: ObservableObject {
             }
 
             let monitorBrightness = (value / maxValue) * 100
-            lastMonitorBrightness = monitorBrightness
 
+            lastMonitorBrightness = monitorBrightness
             guard !isPaused else {
                 statusText = String(
                     format: "Sync paused · monitor %.0f%%",
@@ -452,6 +488,8 @@ final class BrightnessController: ObservableObject {
     }
 
     func sendBrightnessToEnabledLights(_ monitorBrightness: Double) {
+        guard monitorBrightness.isFinite else { return }
+        lastMonitorBrightness = monitorBrightness
         let effectiveLights = configuration.effectiveLights
         let enabledLights = effectiveLights.filter {
             !$0.isHidden && $0.isEnabled && $0.verifiedIPAddress != nil
@@ -484,12 +522,142 @@ final class BrightnessController: ObservableObject {
             enabledLights.count
         )
 
-        for light in enabledLights {
-            let lightBrightness = light.mapping.dimmingValue(
-                for: monitorBrightness
-            )
-            sendBrightness(lightBrightness, to: light)
+        for id in configuration.sidebarOrder {
+            requestSend(to: id)
         }
+    }
+
+    var menuDestinations: [(id: UUID, name: String)] {
+        configuration.sidebarOrder.compactMap { id in
+            if let g = configuration.groups.first(where: { $0.id == id && $0.showInMenu && $0.isEnabled }) {
+                return (id, g.name)
+            }
+            if let l = configuration.lights.first(where: { $0.id == id && !$0.isHidden && $0.showInMenu && $0.isEnabled }),
+               configuration.group(containing: id) == nil {
+                return (id, l.name.isEmpty ? "Unnamed Light" : l.name)
+            }
+            return nil
+        }
+    }
+
+    func offset(for id: UUID) -> Int {
+        adjustments[id]?.offset ?? configuration.groups.first(where: { $0.id == id })?.brightnessOffset
+            ?? configuration.lights.first(where: { $0.id == id })?.brightnessOffset ?? 0
+    }
+
+    func disabledReason(for id: UUID) -> String? {
+        guard menuDestinations.contains(where: { $0.id == id }) else { return "Destination unavailable" }
+        if isPaused { return "Sync paused" }
+        let lights = destinationLights(id)
+        if lights.isEmpty { return "Destination unavailable" }
+        if !lights.contains(where: { $0.isEnabled }) { return "Sync is off" }
+        if lastMonitorBrightness == nil { return "Waiting for monitor brightness" }
+        if !lights.contains(where: { $0.isEnabled && $0.verifiedIPAddress != nil }) { return "Waiting for rediscovery" }
+        return nil
+    }
+
+    private func destinationLights(_ id: UUID) -> [LightConfiguration] {
+        let members = configuration.groups.first(where: { $0.id == id })?.memberIDs ?? [id]
+        return configuration.effectiveLights.filter { members.contains($0.id) && !$0.isHidden }
+    }
+
+    func changeOffset(_ value: Int, for id: UUID) {
+        guard disabledReason(for: id) == nil, menuDestinations.contains(where: { $0.id == id }) else { return }
+        if adjustments[id] == nil { adjustments[id] = Adjustment(offset: offset(for: id)) }
+        adjustments[id]?.offset = min(30, max(-30, value))
+        objectWillChange.send()
+        requestSend(to: id)
+    }
+
+    func finishOffsetAdjustment(_ id: UUID) {
+        guard let adjustment = adjustments[id] else { return }
+        adjustment.cancel?()
+        adjustment.cancel = nil
+        transmit(to: id, adjustment: adjustment)
+        savingOffset = true
+        do {
+            try configurationStore.setBrightnessOffset(adjustment.offset, for: id)
+            offsetSaveError = nil
+            adjustments[id] = nil
+        } catch {
+            adjustments[id] = nil
+            offsetSaveError = "Could not save brightness adjustment: \(error.localizedDescription)"
+            requestSend(to: id) // Restore the persisted value, including on the transport.
+        }
+        savingOffset = false
+        objectWillChange.send()
+    }
+
+    func clearOffsetSaveError() { offsetSaveError = nil }
+
+    private func requestSend(to id: UUID) {
+        guard !isPaused, lastMonitorBrightness != nil else { return }
+        guard let adjustment = adjustments[id] else { transmit(to: id, adjustment: nil); return }
+        let remaining = 0.3 - (now() - (adjustment.lastSend ?? (now() - 0.3)))
+        if adjustment.lastSend == nil || remaining <= 0 {
+            adjustment.cancel?()
+            adjustment.cancel = nil
+            transmit(to: id, adjustment: adjustment)
+        } else if adjustment.cancel == nil {
+            adjustment.cancel = schedule(remaining) { [weak self, weak adjustment] in
+                guard let self, let adjustment, self.adjustments[id] === adjustment else { return }
+                adjustment.cancel = nil
+                self.transmit(to: id, adjustment: adjustment)
+            }
+        }
+    }
+
+    private func transmit(to id: UUID, adjustment: Adjustment?) {
+        guard !isPaused, let monitor = lastMonitorBrightness else { return }
+        var didSend = false
+        for light in destinationLights(id) where light.isEnabled && light.verifiedIPAddress != nil {
+            let brightness = light.mapping.dimmingValue(for: monitor, offset: offset(for: id))
+            if let adjustment, adjustment.sent[light.id] == brightness { continue }
+            sendBrightness(brightness, to: light)
+            adjustment?.sent[light.id] = brightness
+            didSend = true
+        }
+        if didSend { adjustment?.lastSend = now() }
+    }
+
+    private func cancelAdjustments() {
+        // Persist the latest user value when Pause interrupts a gesture; no final send.
+        let interrupted = adjustments
+        adjustments.removeAll()
+        for (id, adjustment) in interrupted {
+            adjustment.cancel?()
+            savingOffset = true
+            do { try configurationStore.setBrightnessOffset(adjustment.offset, for: id) }
+            catch { offsetSaveError = "Could not save brightness adjustment: \(error.localizedDescription)" }
+            savingOffset = false
+        }
+    }
+
+    private func configurationChanged(_ next: AppConfiguration) {
+        let previous = snapshot
+        let monitorChanged = previous.monitor.displayID != next.monitor.displayID
+        snapshot = next
+        guard !savingOffset else { return }
+        for (id, adjustment) in adjustments {
+            let oldMembers = previous.groups.first(where: { $0.id == id })?.memberIDs ?? [id]
+            let newMembers = next.groups.first(where: { $0.id == id })?.memberIDs ?? [id]
+            let oldLights = previous.effectiveLights.filter { oldMembers.contains($0.id) }
+            let newLights = next.effectiveLights.filter { newMembers.contains($0.id) }
+            let routesChanged = oldMembers != newMembers || oldLights.count != newLights.count || oldLights.contains { old in
+                guard let new = newLights.first(where: { $0.id == old.id }) else { return true }
+                return old.ip != new.ip || old.isIPAddressVerified != new.isIPAddressVerified ||
+                    old.isHidden != new.isHidden || old.isEnabled != new.isEnabled || old.mapping != new.mapping ||
+                    old.brightnessOffset != new.brightnessOffset
+            }
+            if monitorChanged || routesChanged || disabledReason(for: id) != nil {
+                adjustment.cancel?()
+                adjustments[id] = nil
+            }
+        }
+        cancelPendingUDPSends()
+        if monitorChanged { lastMonitorBrightness = nil }
+        objectWillChange.send()
+        if let monitor = lastMonitorBrightness { sendBrightnessToEnabledLights(monitor) }
     }
 
     private func sendBrightness(_ brightness: Int, to light: LightConfiguration) {
@@ -550,6 +718,33 @@ struct LightGroup: Codable, Identifiable {
     var memberIDs: [UUID]
     var isEnabled: Bool
     var mapping: BrightnessMapping
+    var brightnessOffset: Int = 0
+    var showInMenu: Bool = false
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, memberIDs, isEnabled, mapping, brightnessOffset, showInMenu
+    }
+
+    init(id: UUID = UUID(), name: String, memberIDs: [UUID], isEnabled: Bool,
+         mapping: BrightnessMapping, brightnessOffset: Int = 0, showInMenu: Bool = false) {
+        self.id = id
+        self.name = name
+        self.memberIDs = memberIDs
+        self.isEnabled = isEnabled
+        self.mapping = mapping
+        self.brightnessOffset = min(30, max(-30, brightnessOffset))
+        self.showInMenu = showInMenu
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(id: try c.decode(UUID.self, forKey: .id), name: try c.decode(String.self, forKey: .name),
+                  memberIDs: try c.decode([UUID].self, forKey: .memberIDs),
+                  isEnabled: try c.decode(Bool.self, forKey: .isEnabled),
+                  mapping: try c.decode(BrightnessMapping.self, forKey: .mapping),
+                  brightnessOffset: try c.decodeIfPresent(Int.self, forKey: .brightnessOffset) ?? 0,
+                  showInMenu: try c.decodeIfPresent(Bool.self, forKey: .showInMenu) ?? false)
+    }
 }
 
 extension AppConfiguration {
@@ -563,6 +758,8 @@ extension AppConfiguration {
             if let group = group(containing: light.id) {
                 effective.isEnabled = group.isEnabled
                 effective.mapping = group.mapping
+                effective.brightnessOffset = group.brightnessOffset
+                effective.showInMenu = false
             }
             if light.isHidden { effective.isEnabled = false }
             return effective

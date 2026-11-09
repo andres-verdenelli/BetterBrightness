@@ -85,6 +85,7 @@ struct DiscoveryControllerTests {
         try testNumberedNames()
         try LightDraftTests.run()
         try LightGroupTests.run()
+        try MenuOffsetTests.run()
     }
     @MainActor
     private static func testDiscoveryOnly() throws {
