@@ -529,15 +529,24 @@ final class BrightnessController: ObservableObject {
 
     var menuDestinations: [(id: UUID, name: String)] {
         configuration.sidebarOrder.compactMap { id in
-            if let g = configuration.groups.first(where: { $0.id == id && $0.showInMenu && $0.isEnabled }) {
+            if let g = configuration.groups.first(where: { $0.id == id && $0.showInMenu }) {
                 return (id, g.name)
             }
-            if let l = configuration.lights.first(where: { $0.id == id && !$0.isHidden && $0.showInMenu && $0.isEnabled }),
+            if let l = configuration.lights.first(where: { $0.id == id && !$0.isHidden && $0.showInMenu }),
                configuration.group(containing: id) == nil {
                 return (id, l.name.isEmpty ? "Unnamed Light" : l.name)
             }
             return nil
         }
+    }
+
+    func syncEnabled(for id: UUID) -> Bool {
+        configuration.groups.first(where: { $0.id == id })?.isEnabled
+            ?? configuration.lights.first(where: { $0.id == id })?.isEnabled ?? false
+    }
+
+    func setSyncEnabled(_ enabled: Bool, for id: UUID) throws {
+        try configurationStore.setSyncEnabled(enabled, for: id)
     }
 
     func offset(for id: UUID) -> Int {

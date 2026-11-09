@@ -35,3 +35,24 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/BetterBrightnessDerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             build
+
+  debug-build:
+    name: Debug build
+    runs-on: macos-26
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build Debug tools and app
+        run: |
+          xcodebuild \
+            -project BetterBrightness.xcodeproj \
+            -scheme BetterBrightness \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/BetterBrightnessDebugDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build

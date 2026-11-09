@@ -17,3 +17,9 @@ For UI changes, run `bash scripts/preview-ui.sh` before asking the user to revie
 Keep reusable developer and local maintenance commands in `scripts/`, tracked in Git alongside their documentation. These tools support the project and are separate from the code shipped inside the app. Generated builds, caches, personal settings, and app backups stay outside version control.
 
 Publishing changes to GitHub and updating the installed app are separate operations. State which operation was performed.
+
+## Debug, Release, and continuity
+
+Shared app behavior must compile in both Debug and Release. Guard development-only tools, their entry points, and diagnostic views with `#if DEBUG`; do not merely hide them at runtime. Run regression checks and build both configurations before publishing. GitHub must pass both **Release build** (which also runs regressions) and **Debug build** before merge. UI changes also require an isolated preview and visual review; a successful build or UDP submission does not confirm physical lamp behavior.
+
+Read [Development handoff](docs/HANDOFF.md) when continuing this menu/diagnostics work. It records the accepted behavior, validation boundaries, and commands for discovering current Git/PR state. Never treat a historical handoff as authorization to publish, merge, or install in a later task.

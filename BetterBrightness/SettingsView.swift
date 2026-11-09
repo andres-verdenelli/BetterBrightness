@@ -2,6 +2,9 @@ import AppKit
 import SwiftUI
 
 struct SettingsView: View {
+#if DEBUG
+    @Environment(\.openWindow) private var openDebugWindow
+#endif
     @Environment(\.isGroupPreview) private var isGroupPreview
     @ObservedObject var configurationStore: ConfigurationStore
     @ObservedObject var discovery: DiscoveryController
@@ -9,6 +12,7 @@ struct SettingsView: View {
 
     private let previewMenu: (() -> Void)?
 
+    @State private var persistedSync: [UUID: Bool] = [:]
     @State private var displayIDText: String
     @State private var discoveryResponseWindowText: String
     @State private var discoveryAttemptCountText: String
@@ -467,6 +471,11 @@ struct SettingsView: View {
     private var advancedSettings: some View {
         VStack(spacing: 0) {
             Form {
+#if DEBUG
+                Section("Debug") {
+                    Button("Diagnostics…") { openDebugWindow(id: "debug-diagnostics") }
+                }
+#endif
                 Section {
                     if isGroupPreview {
                         Text("Simulated preview · device control and Launch at Login are disabled.")
@@ -687,12 +696,22 @@ struct SettingsView: View {
 
     private func mergeDiscoveryChangesIntoDrafts(_ configuration: AppConfiguration) {
         LightDraft.mergeDiscoveryChanges(configuration.lights, into: &lights)
+        for i in lights.indices {
+            if let saved = configuration.lights.first(where: { $0.id == lights[i].id }),
+               let previous = persistedSync[saved.id], previous != saved.isEnabled {
+                lights[i].isEnabled = saved.isEnabled
+            }
+        }
         for i in groups.indices {
             if let saved = configuration.groups.first(where: { $0.id == groups[i].id }) {
+                if let previous = persistedSync[saved.id], previous != saved.isEnabled {
+                    groups[i].isEnabled = saved.isEnabled
+                }
                 groups[i].brightnessOffset = saved.brightnessOffset
                 groups[i].showInMenu = saved.showInMenu
             }
         }
+        persistedSync = Dictionary(uniqueKeysWithValues: configuration.lights.map { ($0.id, $0.isEnabled) } + configuration.groups.map { ($0.id, $0.isEnabled) })
     }
 
     private func requestRemoval(_ light: LightDraft) {

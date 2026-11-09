@@ -104,6 +104,11 @@ enum MenuOffsetTests {
         print("PASS: pause cancels queued sends, disables adjustment, resume uses latest monitor and retained offset")
 
         failWrites = true
+        do {
+            try controller.setSyncEnabled(false, for: a.id)
+            preconditionFailure("Expected Sync save failure")
+        } catch {}
+        precondition(controller.syncEnabled(for: a.id))
         controller.changeOffset(-15, for: a.id)
         controller.finishOffsetAdjustment(a.id)
         precondition(controller.offsetSaveError != nil && controller.offset(for: a.id) == 15)
@@ -120,7 +125,7 @@ enum MenuOffsetTests {
         let offCount = values(a.id).count
         clock.advance(1)
         controller.finishOffsetAdjustment(a.id)
-        precondition(values(a.id).count == offCount && !controller.menuDestinations.contains { $0.id == a.id })
+        precondition(values(a.id).count == offCount && controller.menuDestinations.contains { $0.id == a.id })
         precondition(store.configuration.lights[0].showInMenu && controller.offset(for: a.id) == 15)
         lights = store.configuration.lights
         lights[0].isEnabled = true
@@ -150,9 +155,9 @@ enum MenuOffsetTests {
         group.brightnessOffset = -20
         try store.updateGroup(group)
         precondition(store.configuration.lights.allSatisfy { !$0.showInMenu && $0.brightnessOffset == 0 })
-        group.isEnabled = false
-        try store.updateGroup(group)
-        precondition(!controller.menuDestinations.contains { $0.id == groupID })
+        try controller.setSyncEnabled(false, for: groupID)
+        group = store.configuration.groups[0]
+        precondition(controller.menuDestinations.contains { $0.id == groupID } && controller.disabledReason(for: groupID) == "Sync is off")
         precondition(controller.offset(for: groupID) == -20 && store.configuration.groups[0].showInMenu)
         group.isEnabled = true
         try store.updateGroup(group)
