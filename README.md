@@ -79,11 +79,11 @@ For a simulated groups preview, use:
 bash scripts/preview-ui.sh --groups-demo
 ```
 
-This uses `andydev.BetterBrightness.groupsPreview`, separate demo preferences, four example lights with different settings, and an expandable Studio group. It does not listen to BetterDisplay, discover devices, send UDP, or allow Launch at Login. Demo changes persist across launches. The default preview command runs the real discovery and control code with separate settings; pause other controlling instances before testing real lights with it.
+This uses `andydev.BetterBrightness.groupsPreview`, separate demo preferences, seven simulated lights: Living (Sofa Lamp, Reading Lamp, TV Backlight), Office (Desk Lamp, Bookshelf), and two independent lights (Kitchen Ceiling, Hallway). It does not listen to BetterDisplay, discover devices, send UDP, or allow Launch at Login. Each launch resets the demo to this seven-light fixture for repeatable UI review. The default preview command runs the real discovery and control code with separate settings; pause other controlling instances before testing real lights with it.
 
 To verify grouping manually in the demo:
 
-1. Select Desk and Floor with ⌘ or ⇧, right-click, and choose **Group Lights…**. Confirm Desk is the default settings source; switch to Floor and create a uniquely named group.
+1. Select Kitchen Ceiling and Hallway with ⌘ or ⇧, right-click, and choose **Group Lights…**. Confirm a settings source is selected; switch to the other light and create a uniquely named group.
 2. Expand/collapse the folder. Select the folder to edit its name, Sync and brightness mapping. Select a member to check that only its name, IP, MAC and individual actions appear, with a link back to its group.
 3. Use **Move to Group** or drag lights onto another folder, including a selection of grouped and independent lights. Drag a member onto **Make independent** (visible while dragging), or choose **Remove from Group**; its last shared mapping should remain with Sync on.
 4. Hide a member, then restore it under **Advanced Settings → Hidden Lights**; it returns independent with Sync off. Ungroup a folder and verify that its former members keep its mapping with Sync on.
