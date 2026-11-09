@@ -15,6 +15,7 @@ struct AppConfiguration: Codable {
     let lights: [LightConfiguration]
     let discovery: DiscoveryConfiguration
     let groups: [LightGroup]
+    let sidebarOrder: [UUID]
     let nextLightNumber: Int
 
     init(
@@ -22,8 +23,19 @@ struct AppConfiguration: Codable {
         lights: [LightConfiguration],
         discovery: DiscoveryConfiguration = .standard,
         groups: [LightGroup] = [],
-        nextLightNumber: Int? = nil
+        nextLightNumber: Int? = nil,
+        sidebarOrder: [UUID]? = nil
     ) {
+        let grouped = Set(groups.flatMap(\.memberIDs))
+        let entries: [(UUID, String)] = groups.map { ($0.id, $0.name) } + lights.filter { !$0.isHidden && !grouped.contains($0.id) }.map { ($0.id, $0.name.isEmpty ? $0.ip : $0.name) }
+        let valid = Set(entries.map { $0.0 })
+        var seen = Set<UUID>()
+        let preserved = (sidebarOrder ?? []).filter { valid.contains($0) && seen.insert($0).inserted }
+        let sortedEntries = entries.sorted {
+            let order = $0.1.localizedStandardCompare($1.1)
+            return order == .orderedSame ? $0.0.uuidString < $1.0.uuidString : order == .orderedAscending
+        }
+        self.sidebarOrder = preserved + sortedEntries.map { $0.0 }.filter { seen.insert($0).inserted }
         self.monitor = monitor
         self.lights = lights
         self.discovery = discovery
@@ -36,22 +48,31 @@ struct AppConfiguration: Codable {
         case lights
         case discovery
         case groups
+        case sidebarOrder
         case nextLightNumber
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        monitor = try container.decode(MonitorConfiguration.self, forKey: .monitor)
-        lights = try container.decode([LightConfiguration].self, forKey: .lights)
-        groups = try container.decodeIfPresent([LightGroup].self, forKey: .groups) ?? []
-        discovery = try container.decodeIfPresent(
-            DiscoveryConfiguration.self,
-            forKey: .discovery
-        ) ?? .standard
-        nextLightNumber = max(
-            try container.decodeIfPresent(Int.self, forKey: .nextLightNumber) ?? 1,
-            Self.inferredNextLightNumber(lights)
-        )
+        let lights = try container.decode([LightConfiguration].self, forKey: .lights)
+        var groups = try container.decodeIfPresent([LightGroup].self, forKey: .groups) ?? []
+        let order = try container.decodeIfPresent([UUID].self, forKey: .sidebarOrder)
+        if order == nil {
+            for index in groups.indices {
+                groups[index].memberIDs.sort { a, b in
+                    let first = lights.first { $0.id == a }?.name ?? ""
+                    let second = lights.first { $0.id == b }?.name ?? ""
+                    let comparison = first.localizedStandardCompare(second)
+                    return comparison == .orderedSame ? a.uuidString < b.uuidString : comparison == .orderedAscending
+                }
+            }
+        }
+        self.init(monitor: try container.decode(MonitorConfiguration.self, forKey: .monitor),
+                  lights: lights,
+                  discovery: try container.decodeIfPresent(DiscoveryConfiguration.self, forKey: .discovery) ?? .standard,
+                  groups: groups,
+                  nextLightNumber: try container.decodeIfPresent(Int.self, forKey: .nextLightNumber),
+                  sidebarOrder: order)
     }
 
     private static func inferredNextLightNumber(_ lights: [LightConfiguration]) -> Int {
@@ -541,5 +562,14 @@ extension AppConfiguration {
             if light.isHidden { effective.isEnabled = false }
             return effective
         }
+    }
+}
+
+/// Root-level insertion treats an expanded folder and its descendants as one block.
+enum SidebarOrder {
+    static func rootInsertion(roots: [UUID], children: [UUID: [UUID]], hovered: UUID, afterHeader: Bool) -> Int? {
+        let root = children.first(where: { $0.value.contains(hovered) })?.key ?? hovered
+        guard let index = roots.firstIndex(of: root) else { return nil }
+        return index + (afterHeader ? 1 : 0)
     }
 }

@@ -192,7 +192,8 @@ final class ConfigurationStore: ObservableObject {
             lights: normalizedLights,
             discovery: discovery,
             groups: groups,
-            nextLightNumber: configuration.nextLightNumber
+            nextLightNumber: configuration.nextLightNumber,
+            sidebarOrder: configuration.sidebarOrder
         )
         try persist(newConfiguration)
     }
@@ -297,7 +298,8 @@ final class ConfigurationStore: ObservableObject {
             lights: lights,
             discovery: configuration.discovery,
             groups: configuration.groups,
-            nextLightNumber: nextLightNumber
+            nextLightNumber: nextLightNumber,
+            sidebarOrder: configuration.sidebarOrder
         )
         try persist(newConfiguration)
 
@@ -389,6 +391,32 @@ final class ConfigurationStore: ObservableObject {
         try save(displayID: configuration.monitor.displayID, lights: lights, groups: groups)
     }
 
+    /// Index is a slot in the original sibling list, before removing dragged IDs.
+    func reorderSidebar(_ ids: Set<UUID>, parent: UUID?, index: Int) throws {
+        var groups = configuration.groups
+        let siblings: [UUID]
+        if let parent {
+            guard let group = groups.first(where: { $0.id == parent }) else {
+                throw ConfigurationError.invalidGroup("The group no longer exists.")
+            }
+            siblings = group.memberIDs
+        } else { siblings = configuration.sidebarOrder }
+        guard !ids.isEmpty, ids.isSubset(of: Set(siblings)), (0...siblings.count).contains(index) else {
+            throw ConfigurationError.invalidGroup("Reorder items within the same group or sidebar level.")
+        }
+        let moving = siblings.filter { ids.contains($0) }
+        var reordered = siblings.filter { !ids.contains($0) }
+        let insertion = index - siblings.prefix(index).filter { ids.contains($0) }.count
+        reordered.insert(contentsOf: moving, at: insertion)
+        guard reordered != siblings else { return }
+        if let parent, let g = groups.firstIndex(where: { $0.id == parent }) { groups[g].memberIDs = reordered }
+        let next = AppConfiguration(monitor: configuration.monitor, lights: configuration.lights,
+                                    discovery: configuration.discovery, groups: groups,
+                                    nextLightNumber: configuration.nextLightNumber,
+                                    sidebarOrder: parent == nil ? reordered : configuration.sidebarOrder)
+        try persist(next)
+    }
+
     func ungroup(_ id: UUID) throws {
         guard let group = configuration.groups.first(where: { $0.id == id }) else { return }
         try moveLights(Set(group.memberIDs), to: nil)
@@ -435,7 +463,8 @@ final class ConfigurationStore: ObservableObject {
             lights: lights,
             discovery: configuration.discovery,
             groups: configuration.groups,
-            nextLightNumber: configuration.nextLightNumber
+            nextLightNumber: configuration.nextLightNumber,
+            sidebarOrder: configuration.sidebarOrder
         )
     }
 
