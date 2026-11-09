@@ -104,7 +104,10 @@ private struct MenuBarContent: View {
                 NSApplication.shared.terminate(nil)
             }
         }
-        .buttonStyle(.borderless)
+        // Use the system label color without borderless-button tint/dimming.
+        // NSColor remains dynamic for light, dark, and accessibility appearances.
+        .buttonStyle(.plain)
+        .foregroundStyle(Color(nsColor: .labelColor))
         .padding(14)
         .frame(width: 290, alignment: .leading)
     }
