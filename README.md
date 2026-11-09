@@ -17,13 +17,13 @@
 
 BetterBrightness keeps compatible WiZ lights visually aligned with a selected monitor. It listens for local brightness notifications from BetterDisplay, maps the monitor range to a configurable range for each light, and sends WiZ commands directly over UDP.
 
-The app is intentionally small and native. The menu bar panel contains Pause or Resume, Discover Lights, its progress and latest results, Settings, and Quit. The panel stays open during discovery. Settings uses a light list and a dedicated brightness-mapping editor, with monitor and discovery options under Advanced Settings.
+The app is intentionally small and native. The menu bar panel contains Pause or Resume, Settings, and Quit. Discover Lights, its progress, latest results, and errors appear under Discovery in Advanced Settings. Settings uses a light list and a dedicated brightness-mapping editor, with monitor and discovery options under Advanced Settings.
 
 ## Features
 
 - Native SwiftUI menu bar app for macOS
 - BetterDisplay brightness notification listener
-- Automatic and manual WiZ discovery over the local network
+- Automatic WiZ discovery at launch and on-demand broadcast discovery over the local network
 - Stable light identity based on MAC address, with automatic DHCP address updates
 - Safe reconciliation when a responding light reuses an address held by an unavailable device
 - Per-light enable switch and custom name
@@ -124,11 +124,11 @@ This prints the resulting app's temporary path. Both modes record the source com
 1. Launch BetterBrightness from the menu bar.
 2. Open **Settings**.
 3. Open **Advanced Settings** with the gear button and confirm the BetterDisplay display ID for the monitor you want to follow.
-4. Select **Discover Lights** from the menu bar while the Mac and lights are on the same network. Its results show the lights found and IP addresses updated.
-5. Select each discovered light in Settings and enable **Sync brightness** for each light you want to control. Double-click its name in the sidebar, or right-click and choose **Rename**, to rename it. Right-click also provides **Remove Light**.
-6. Drag the two handles on the Monitor or Light slider to choose its range. The minimum and maximum percentages appear at the left and right; changes save when you finish dragging. Hover over or click **?** for an explanation. The gear button opens Advanced Settings, including the BetterDisplay display ID.
+4. In **Advanced Settings → Discovery**, select **Discover Lights** while the Mac and lights are on the same network. Its results show the lights found and IP addresses updated.
+5. Select each discovered light in Settings and enable **Sync brightness** for each light you want to control. Edit **Name** in the selected light’s **Light** section, beside its IP and MAC addresses, to rename it. Press Return or leave the field to save; Escape cancels. Right-click in the sidebar provides **Remove Light**.
+6. Edit the monitor and light percentages under **Dim light** and **Bright light**. Press Return or leave a field to save; use the steppers for 1% adjustments. Hover over or click **?** for an explanation. The gear button opens Advanced Settings, including the BetterDisplay display ID.
 
-Newly discovered lights remain disabled until you explicitly enable them.
+Newly discovered lights remain disabled until you explicitly enable them. Lights are added only when they respond to a Discovery broadcast; manual entry by IP is not available. New discoveries receive numbered names (`Light 1`, `Light 2`, and so on) from a saved sequence. Existing names are preserved, and numbers are not reused after renaming or removal. A new installation starts with no lights. IP and MAC addresses in Settings are read-only and updated by Discovery.
 
 ## Launch at login
 
@@ -140,21 +140,18 @@ Use a signed build installed in `/Applications` for the real login test. Verify 
 
 ## Brightness mapping
 
-Each light has two ranges:
+Each light’s **Follow monitor brightness** section describes two situations: **Dim light** and **Bright light**. For example: “When the monitor reaches 40%, set the light to 1%” and “When the monitor reaches 80%, set the light to 100%.” Existing saved values are preserved.
 
-- **Monitor minimum and maximum** define the input range.
-- **Light minimum and maximum** define the visible output range.
+Edit the four percentages directly (Return or leaving a field confirms), use their steppers, or focus a field and press Up/Down to adjust by 1%. All values can also be adjusted with the keyboard using Tab and the percentage fields.
 
-For example, a monitor range of 40%–80% mapped to a light range of 10%–90% produces 10% light brightness at the monitor minimum, 90% at the monitor maximum, and proportional values in between. Values outside the monitor range remain at the nearest light limit.
-
-BetterBrightness presents light brightness as 1%–100%. The WiZ protocol conversion is handled internally.
+The light changes linearly between the two points and stays at the nearest light limit outside that interval. Monitor and light endpoints remain at least 1 percentage point apart; light brightness cannot go below 1%. These controls do not change the monitor’s brightness. The WiZ protocol conversion is handled internally.
 
 ## Discovery settings
 
 - **Response window** controls how long the app listens after each discovery broadcast. The default is 500 ms; 500–1,000 ms is recommended.
 - **Attempts** controls how many broadcasts are sent. The default is 3; 3–5 is usually sufficient, and the maximum is 10.
 
-Longer windows and more attempts can improve discovery on slower networks, but also make each scan take longer.
+Longer windows and more attempts can improve discovery on slower networks, but also make each scan take longer. The Discover Lights button saves valid settings before starting a scan and is disabled during discovery. Closing Settings does not stop the scan; reopening Advanced Settings shows its progress or latest result for the current app session. Progress and the final result appear to the right of the button. Results report new lights found, no new lights, or no WiZ lights found. Errors are displayed in full below the button; select Discover Lights to retry. Automatic discovery at launch remains enabled.
 
 ## Privacy and networking
 
@@ -180,7 +177,7 @@ macOS will ask for Local Network access because discovery and control cannot wor
 | `LaunchAtLoginController.swift` | macOS login item registration and current system status |
 | `LaunchAtLoginControl.swift` | Shared login toggle, approval guidance, and errors |
 | `SettingsView.swift` | Native settings interface and per-light controls |
-| `LightDraft.swift` | Editable light settings that preserve unsaved manual IP changes during discovery |
+| `LightDraft.swift` | Editable light settings that preserve name and brightness edits while merging discovered addresses |
 | `BrightnessRangeControl.swift` | A shared range track with two native AppKit thumbs, keyboard and accessibility support |
 
 See [ROADMAP.md](ROADMAP.md) for implementation notes and possible future improvements.

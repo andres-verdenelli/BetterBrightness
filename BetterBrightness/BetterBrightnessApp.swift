@@ -54,6 +54,7 @@ struct BetterBrightnessApp: App {
         Settings {
             SettingsView(
                 configurationStore: controller.configurationStore,
+                discovery: controller.discoveryController,
                 launchAtLogin: launchAtLogin
             )
                 .environment(\.isGroupPreview, isGroupPreview)
@@ -94,10 +95,6 @@ private struct MenuBarContent: View {
 
             Divider()
 
-            DiscoveryMenuContent(discovery: controller.discoveryController)
-
-            Divider()
-
             Button("Settings…", systemImage: "gearshape") {
                 NSApplication.shared.activate(ignoringOtherApps: true)
                 openSettings()
@@ -112,42 +109,6 @@ private struct MenuBarContent: View {
         .frame(width: 290, alignment: .leading)
     }
 }
-
-struct DiscoveryMenuContent: View {
-    @ObservedObject var discovery: DiscoveryController
-
-    var body: some View {
-        Button("Discover Lights", systemImage: "dot.radiowaves.left.and.right") {
-            discovery.discoverLights()
-        }
-        .disabled(discovery.isDiscovering)
-        .buttonStyle(.bordered)
-
-        if discovery.isDiscovering {
-            HStack(spacing: 8) {
-                ProgressView().controlSize(.small)
-                Text(discovery.attempt == 0
-                     ? "Starting discovery…"
-                     : "Attempt \(discovery.attempt) of \(discovery.totalAttempts)")
-            }
-        } else if let errorMessage = discovery.errorMessage {
-            Text("Discovery failed")
-            Text(errorMessage)
-        } else if let summary = discovery.lastSummary {
-            Text(summary.foundLights == 0
-                 ? "No WiZ lights found"
-                 : "\(summary.foundLights) \(summary.foundLights == 1 ? "light" : "lights") found")
-            Text("\(summary.updatedIPs) IP \(summary.updatedIPs == 1 ? "address" : "addresses") updated")
-            if summary.newLights > 0 {
-                Text("\(summary.newLights) new · Enable in Settings")
-            }
-            if summary.invalidatedIPs > 0 {
-                Text("\(summary.invalidatedIPs) waiting for rediscovery")
-            }
-        }
-    }
-}
-
 private struct GroupPreviewKey: EnvironmentKey {
     static let defaultValue = false
 }

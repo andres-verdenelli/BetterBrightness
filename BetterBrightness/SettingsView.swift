@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @Environment(\.isGroupPreview) private var isGroupPreview
     @ObservedObject var configurationStore: ConfigurationStore
+    @ObservedObject var discovery: DiscoveryController
     @ObservedObject var launchAtLogin: LaunchAtLoginController
 
     @State private var displayIDText: String
@@ -28,15 +29,15 @@ struct SettingsView: View {
     @State private var showsDeleteConfirmation = false
     @State private var renamingLightID: UUID?
     @State private var renameText = ""
-    @FocusState private var renameFocus: UUID?
     @FocusState private var advancedField: AdvancedField?
 
     private enum AdvancedField: Hashable {
         case displayID, responseWindow, attempts
     }
 
-    init(configurationStore: ConfigurationStore, launchAtLogin: LaunchAtLoginController) {
+    init(configurationStore: ConfigurationStore, discovery: DiscoveryController, launchAtLogin: LaunchAtLoginController) {
         self.configurationStore = configurationStore
+        self.discovery = discovery
         self.launchAtLogin = launchAtLogin
         let configuration = configurationStore.configuration
         _displayIDText = State(initialValue: String(configuration.monitor.displayID))
@@ -110,6 +111,11 @@ struct SettingsView: View {
                     onLeaveGroup: { runAction { try configurationStore.moveLights([id], to: nil) } },
                     onHide: { runAction { try configurationStore.setLightHidden(id, hidden: true) } },
                     onRemove: { requestRemoval(lights[index]) },
+                    isRenaming: renamingLightID == id,
+                    renameText: $renameText,
+                    onBeginRename: { beginRename(id) },
+                    onFinishRename: finishRename,
+                    onCancelRename: cancelRename,
                     onCommit: {
                         guard selectedLightID == id else { return }
                         saveConfiguration()
@@ -136,16 +142,6 @@ struct SettingsView: View {
                 .help(isSidebarVisible ? "Hide Sidebar" : "Show Sidebar")
             }
             ToolbarItemGroup {
-                Button("Add Light Manually", systemImage: "plus") {
-                    finishRename()
-                    guard saveConfiguration() else { return }
-                    let light = LightDraft()
-                    lights.append(light)
-                    selectedIDs = [light.id]
-                    beginRename(light.id)
-                }
-                .help("Add a light by IP address")
-
                 Button("Advanced Settings", systemImage: "gearshape") {
                     finishRename()
                     guard saveConfiguration() else { return }
@@ -159,11 +155,6 @@ struct SettingsView: View {
         }
         .onReceive(configurationStore.$configuration) { configuration in
             mergeDiscoveryChangesIntoDrafts(configuration)
-        }
-        .onChange(of: renameFocus) { previous, current in
-            if let previous, previous != current, previous == renamingLightID {
-                finishRename()
-            }
         }
         .sheet(isPresented: $showsCreateGroup) { createGroupSheet }
         .confirmationDialog("Ungroup Lights?", isPresented: Binding(
@@ -371,7 +362,6 @@ struct SettingsView: View {
             reloadSnapshot()
             return true
         } catch {
-            reloadSnapshot()
             errorMessage = error.localizedDescription
             showsError = true
             return false
@@ -390,27 +380,15 @@ struct SettingsView: View {
             Image(systemName: light.isIPAddressVerified ? "lightbulb" : "exclamationmark.triangle")
                 .foregroundStyle(light.isIPAddressVerified ? Color.secondary : Color.orange)
             VStack(alignment: .leading, spacing: 4) {
-                if renamingLightID == light.id {
-                    TextField("Light name", text: $renameText)
-                        .textFieldStyle(.plain)
-                        .foregroundStyle(Color(nsColor: .textColor))
-                        .tint(Color(nsColor: .controlAccentColor))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .background(
-                            Color(nsColor: .textBackgroundColor),
-                            in: RoundedRectangle(cornerRadius: 4)
-                        )
-                        .focused($renameFocus, equals: light.id)
-                        .onSubmit(finishRename)
-                        .onExitCommand(perform: cancelRename)
-                        .onAppear { renameFocus = light.id }
-                } else {
-                    Text(light.displayName)
+                Text(light.displayName)
+                    .lineLimit(1)
+                    .help(light.displayName)
+                if !light.isIPAddressVerified {
+                    Text("Waiting for rediscovery")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .help(light.displayName)
                 }
-
             }
             Spacer(minLength: 0)
         }
@@ -444,14 +422,11 @@ struct SettingsView: View {
               let index = lights.firstIndex(where: { $0.id == id }) else { return }
         lights[index].name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
         renamingLightID = nil
-        renameFocus = nil
-        // A manually added light can be named before its IP address is entered.
-        if !lights[index].ip.isEmpty { saveConfiguration() }
+        saveConfiguration()
     }
 
     private func cancelRename() {
         renamingLightID = nil
-        renameFocus = nil
     }
 
     private var advancedSettings: some View {
@@ -474,6 +449,10 @@ struct SettingsView: View {
                     Text("Use the displayID shown in BetterDisplay brightness notifications.")
                 }
                 Section {
+                    DiscoverySettingsContent(discovery: discovery) {
+                        guard saveConfiguration() else { return }
+                        discovery.discoverLights()
+                    }
                     LabeledContent("Response window") {
                         HStack(spacing: 4) {
                             TextField("Response window", text: discoveryResponseWindowBinding)
@@ -491,7 +470,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Discovery")
                 } footer: {
-                    Text("Default: 500 ms and 3 attempts. Longer windows and more attempts make discovery take longer. Discover lights from the menu bar.")
+                    Text("Default: 500 ms and 3 attempts. Longer windows and more attempts make discovery take longer. Use Discover Lights above to search your network.")
                 }
                 Section("Hidden Lights") {
                     let hidden = lights.filter(\.isHidden)
@@ -519,7 +498,7 @@ struct SettingsView: View {
             }
             .padding()
         }
-        .frame(width: 460, height: 480)
+        .frame(width: 460, height: 640)
         .background {
             SettingsWindowSupport { advancedField = nil }
         }
@@ -552,13 +531,12 @@ struct SettingsView: View {
         do {
             try configurationStore.save(
                 displayID: displayID,
-                lights: LightDraft.configurationsForSaving(lights),
+                lights: lights.map(\.configuration),
                 discovery: discoveryConfiguration,
                 groups: groups
             )
             return true
         } catch {
-            reloadSnapshot()
             errorMessage = error.localizedDescription
             showsError = true
             return false
@@ -819,14 +797,18 @@ private struct LightDetailView: View {
     let onLeaveGroup: () -> Void
     let onHide: () -> Void
     let onRemove: () -> Void
+    let isRenaming: Bool
+    @Binding var renameText: String
+    let onBeginRename: () -> Void
+    let onFinishRename: () -> Void
+    let onCancelRename: () -> Void
     let onCommit: () -> Void
-    @FocusState private var isIPFocused: Bool
     @FocusState private var isNameFocused: Bool
 
     private let syncHelp = "When on, this light follows brightness changes from your selected BetterDisplay monitor. Turn it off to stop sending brightness updates to this light."
 
     private var mappingHelp: String {
-        "Monitor chooses the brightness range that controls this light. Light chooses how dim and how bright the light can get. These controls do not change your monitor's brightness.\n\n"
+        "Edit the percentages in Dim light and Bright light. Use Tab to reach each percentage; type a value and press Return, or use the stepper to adjust by 1%. Minimum and maximum values stay at least 1 percentage point apart. These controls do not change your monitor's brightness.\n\n"
             + "With your current settings:\n"
             + "• At \(light.monitorMin)% monitor brightness, the light is set to \(light.lightMinPercent)%.\n"
             + "• At \(light.monitorMax)% monitor brightness, the light is set to \(light.lightMaxPercent)%.\n\n"
@@ -835,11 +817,6 @@ private struct LightDetailView: View {
 
     var body: some View {
         Form {
-            Section("Name") {
-                TextField("Light name", text: $light.name).onSubmit(onCommit)
-                    .onChange(of: isNameFocused) { was, now in if was && !now { onCommit() } }
-                    .focused($isNameFocused)
-            }
             if let group {
                 Section {
                     Button("Brightness controlled by \(group.name)") { onSelectGroup(group.id) }
@@ -865,32 +842,28 @@ private struct LightDetailView: View {
             }
 
             Section {
-                rangeRow("Monitor", minimum: $light.monitorMin,
-                         maximum: $light.monitorMax, domain: 0...100)
-                rangeRow("Light", minimum: $light.lightMinPercent,
-                         maximum: $light.lightMaxPercent, domain: 1...100)
+                FollowBrightnessEditor(
+                    monitorMin: $light.monitorMin, monitorMax: $light.monitorMax,
+                    lightMin: $light.lightMinPercent, lightMax: $light.lightMaxPercent,
+                    onCommit: onCommit
+                )
             } header: {
                 HStack {
-                    Text("Brightness mapping")
+                    Text("Follow monitor brightness")
                     Spacer()
-                    SettingsHelpButton(title: "Brightness mapping", explanation: mappingHelp)
+                    SettingsHelpButton(title: "Follow monitor brightness", explanation: mappingHelp)
                 }
             }
 
             }
 
             Section("Light") {
-                if light.macAddress == nil {
-                    TextField("IP address", text: $light.ip)
-                        .focused($isIPFocused)
-                        .onSubmit(onCommit)
-                        .help("Discover lights from the menu bar to identify this light by MAC address.")
-                    LabeledContent("MAC address", value: "Not discovered")
-                } else {
-                    LabeledContent("IP address", value: light.ip)
-                    if let mac = light.macAddress {
-                        LabeledContent("MAC address", value: WiZMACAddress.display(mac))
-                    }
+                LabeledContent("Name") {
+                    nameEditor.multilineTextAlignment(.trailing)
+                }
+                LabeledContent("IP address", value: light.ip)
+                if let mac = light.macAddress {
+                    LabeledContent("MAC address", value: WiZMACAddress.display(mac))
                 }
             }
             Section("Actions") {
@@ -902,35 +875,45 @@ private struct LightDetailView: View {
         }
         .formStyle(.grouped)
         .navigationTitle(light.displayName)
-        .onChange(of: isIPFocused) { previous, current in
-            if previous && !current { onCommit() }
+        .onChange(of: isNameFocused) { wasFocused, focused in
+            if wasFocused && !focused && isRenaming { onFinishRename() }
         }
     }
 
-    private func rangeRow(
-        _ title: String, minimum: Binding<Int>, maximum: Binding<Int>,
-        domain: ClosedRange<Int>
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.subheadline.weight(.medium))
-            HStack(spacing: 12) {
-                Text("\(minimum.wrappedValue)%")
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .leading)
-                    .accessibilityLabel("\(title) minimum: \(minimum.wrappedValue) percent")
-                BrightnessRangeControl(minimum: minimum, maximum: maximum,
-                                       domain: domain, title: title, onCommit: onCommit)
-                    .frame(height: 28)
-                Text("\(maximum.wrappedValue)%")
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 42, alignment: .trailing)
-                    .accessibilityLabel("\(title) maximum: \(maximum.wrappedValue) percent")
+    @ViewBuilder
+    private var nameEditor: some View {
+        if isRenaming {
+            TextField("Light name", text: $renameText)
+                .labelsHidden()
+                .textFieldStyle(.plain)
+                .focused($isNameFocused)
+                .onSubmit(onFinishRename)
+                .onExitCommand(perform: onCancelRename)
+                .onKeyPress(.escape) {
+                    onCancelRename()
+                    return .handled
+                }
+                .onAppear {
+                    DispatchQueue.main.async { isNameFocused = true }
+                }
+                .accessibilityLabel("Light name")
+        } else {
+            Button(action: onBeginRename) {
+                HStack(spacing: 6) {
+                    Text(light.displayName).lineLimit(1)
+                    Image(systemName: "pencil")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                }
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .help("Rename light")
+            .accessibilityLabel("Rename \(light.displayName)")
         }
-        .padding(.vertical, 4)
     }
+
+
 }
 
 private struct GroupDetailView: View {
@@ -960,9 +943,12 @@ private struct GroupDetailView: View {
                     .toggleStyle(.switch).onChange(of: group.isEnabled) { onCommit() }
             }
             Section {
-                rangeRow("Monitor", minimum: value(\.monitorMin), maximum: value(\.monitorMax), domain: 0...100)
-                rangeRow("Light", minimum: value(\.lightMinPercent), maximum: value(\.lightMaxPercent), domain: 1...100)
-            } header: { Text("Brightness mapping") }
+                FollowBrightnessEditor(
+                    monitorMin: value(\.monitorMin), monitorMax: value(\.monitorMax),
+                    lightMin: value(\.lightMinPercent), lightMax: value(\.lightMaxPercent),
+                    onCommit: onCommit
+                )
+            } header: { Text("Follow monitor brightness") }
               footer: { Text("These settings control every member. Offline lights do not stop the others from syncing.") }
             Section("Members") {
                 ForEach(members.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }) { light in
@@ -985,17 +971,7 @@ private struct GroupDetailView: View {
         .onChange(of: nameFocused) { was, now in if was && !now { onCommit() } }
     }
 
-    private func rangeRow(_ title: String, minimum: Binding<Int>, maximum: Binding<Int>, domain: ClosedRange<Int>) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title).font(.subheadline.weight(.medium))
-            HStack(spacing: 12) {
-                Text("\(minimum.wrappedValue)%").monospacedDigit().foregroundStyle(.secondary).frame(width: 42)
-                BrightnessRangeControl(minimum: minimum, maximum: maximum, domain: domain, title: title, onCommit: onCommit)
-                    .frame(height: 28)
-                Text("\(maximum.wrappedValue)%").monospacedDigit().foregroundStyle(.secondary).frame(width: 42)
-            }
-        }.padding(.vertical, 4)
-    }
+
 }
 
 private struct SettingsHelpButton: View {
@@ -1040,4 +1016,60 @@ private struct SettingsHelpButton: View {
 private final class SidebarDragProvider: NSItemProvider, @unchecked Sendable {
     var onEnd: (@Sendable () -> Void)?
     deinit { onEnd?() }
+}
+
+struct DiscoverySettingsContent: View {
+    @ObservedObject var discovery: DiscoveryController
+
+    let onDiscover: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                Button("Discover Lights", systemImage: "dot.radiowaves.left.and.right") {
+                    onDiscover()
+                }
+                .disabled(discovery.isDiscovering)
+                .buttonStyle(.bordered)
+
+                Spacer(minLength: 0)
+
+                status
+                    .multilineTextAlignment(.trailing)
+                    .foregroundStyle(.secondary)
+            }
+
+            if !discovery.isDiscovering, let errorMessage = discovery.errorMessage {
+                Text(errorMessage)
+            } else if !discovery.isDiscovering,
+                      let summary = discovery.lastSummary,
+                      summary.invalidatedIPs > 0 {
+                Text("\(summary.invalidatedIPs) waiting for rediscovery")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        if discovery.isDiscovering {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text(discovery.attempt == 0
+                     ? "Starting discovery…"
+                     : "Attempt \(discovery.attempt) of \(discovery.totalAttempts)")
+            }
+        } else if discovery.errorMessage != nil {
+            Text("Discovery failed")
+        } else if let summary = discovery.lastSummary {
+            if summary.foundLights == 0 {
+                Text("No WiZ lights found")
+            } else if summary.newLights == 0 {
+                Text("No new lights found")
+            } else {
+                Text("\(summary.newLights) new \(summary.newLights == 1 ? "light" : "lights") found")
+            }
+        }
+    }
 }
