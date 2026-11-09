@@ -14,17 +14,20 @@ struct BetterBrightnessApp: App {
 #endif
         if isGroupPreview {
             let defaults = UserDefaults(suiteName: "andydev.BetterBrightness.groupsDemo.v1")!
+            // Start every simulated UI session from the same review fixture.
+            defaults.removeObject(forKey: "betterBrightness.configuration")
             let store = ConfigurationStore(defaults: defaults)
-            if defaults.data(forKey: "betterBrightness.configuration") == nil {
+            do {
                 let mapping = BrightnessMapping(monitorMin: 40, monitorMax: 80, lightMinPercent: 1, lightMaxPercent: 100)
-                let lights = ["Desk", "Floor", "Shelf", "Window"].enumerated().map { index, name in
+                let lights = ["Sofa Lamp", "Reading Lamp", "TV Backlight", "Desk Lamp", "Bookshelf", "Kitchen Ceiling", "Hallway"].enumerated().map { index, name in
                     LightConfiguration(name: name, macAddress: String(format: "0200000000%02x", index),
                                        ip: "192.0.2.\(index + 10)", isEnabled: index == 0,
                                        mapping: index == 1 ? BrightnessMapping(monitorMin: 20, monitorMax: 90, lightMinPercent: 10, lightMaxPercent: 70) : mapping)
                 }
                 do {
                     try store.save(displayID: 3, lights: lights)
-                    _ = try store.createGroup(name: "Studio", memberIDs: [lights[2].id, lights[3].id], sourceID: lights[2].id)
+                    _ = try store.createGroup(name: "Living", memberIDs: [lights[0].id, lights[1].id, lights[2].id], sourceID: lights[0].id)
+                    _ = try store.createGroup(name: "Office", memberIDs: [lights[3].id, lights[4].id], sourceID: lights[3].id)
                 }
                 catch { assertionFailure("Could not prepare preview: \(error)") }
             }

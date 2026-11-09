@@ -3,6 +3,8 @@ import Foundation
 
 enum LightGroupTests {
     @MainActor static func run() throws {
+        try ordering()
+        try unnamedOrderMigration()
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         let suite = "BetterBrightness.GroupTests.\(UUID().uuidString)"
@@ -182,4 +184,110 @@ enum LightGroupTests {
         precondition(try! encoder.encode(failing.configuration) == independentBefore)
         print("PASS: injected storage failures roll back membership/settings/identity and publish no partial state")
     }
+    @MainActor private static func ordering() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        let suite = "BetterBrightness.OrderTests.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let mapping = BrightnessMapping(monitorMin: 20, monitorMax: 90, lightMinPercent: 1, lightMaxPercent: 100)
+        let lights = ["Delta", "Bravo", "Alpha", "Charlie", "Echo"].enumerated().map { index, name in
+            LightConfiguration(name: name, ip: "192.0.2.\(index + 1)", isEnabled: false, mapping: mapping)
+        }
+        let store = ConfigurationStore(defaults: defaults)
+        try store.save(displayID: 3, lights: lights)
+        let initial = [lights[2].id, lights[1].id, lights[3].id, lights[0].id, lights[4].id]
+        precondition(store.configuration.sidebarOrder == initial)
+        try store.reorderSidebar([initial[0], initial[2]], parent: nil, index: 5)
+        let reordered = [initial[1], initial[3], initial[4], initial[0], initial[2]]
+        precondition(store.configuration.sidebarOrder == reordered)
+        precondition(ConfigurationStore(defaults: defaults).configuration.sidebarOrder == reordered)
+        var renamed = lights
+        renamed[0].name = "ZZZ"
+        try store.save(displayID: 3, lights: renamed)
+        precondition(store.configuration.sidebarOrder == reordered)
+        let group = try store.createGroup(name: "Room", memberIDs: [initial[0], initial[2]], sourceID: initial[0])
+        let members = store.configuration.groups[0].memberIDs
+        let beforeLights = try encoder.encode(store.configuration.lights)
+        try store.reorderSidebar([members[0]], parent: group, index: 2)
+        precondition(store.configuration.groups[0].memberIDs == Array(members.reversed()))
+        precondition(try! encoder.encode(store.configuration.lights) == beforeLights)
+        let saved = try encoder.encode(store.configuration)
+        for operation in [
+            { try store.reorderSidebar([members[0]], parent: nil, index: 0) },
+            { try store.reorderSidebar([initial[1]], parent: group, index: 0) },
+            { try store.reorderSidebar([initial[1], members[0]], parent: nil, index: 0) },
+            { try store.reorderSidebar([initial[1]], parent: nil, index: 999) }
+        ] {
+            do { try operation(); preconditionFailure("Expected invalid destination") } catch {}
+            precondition(try! encoder.encode(store.configuration) == saved)
+        }
+        let failing = ConfigurationStore(defaults: defaults, writeData: { _ in throw ConfigurationError.storageFailure })
+        let failingBefore = try encoder.encode(failing.configuration)
+        // Dropping back in place must not even attempt a write.
+        try failing.reorderSidebar([group], parent: nil, index: failing.configuration.sidebarOrder.count)
+        precondition(try! encoder.encode(failing.configuration) == failingBefore)
+        do { try failing.reorderSidebar([group], parent: nil, index: 0); preconditionFailure("Expected storage error") } catch {}
+        precondition(try! encoder.encode(failing.configuration) == failingBefore)
+        // Decode old files with no ordering metadata; retain their original visual alphabetical order.
+        var old = try JSONSerialization.jsonObject(with: saved) as! [String: Any]
+        old.removeValue(forKey: "sidebarOrder")
+        let migrated = try JSONDecoder().decode(AppConfiguration.self, from: JSONSerialization.data(withJSONObject: old))
+        precondition(migrated.groups[0].memberIDs == [initial[0], initial[2]])
+        let normalized = AppConfiguration(monitor: store.configuration.monitor, lights: lights,
+                                          groups: store.configuration.groups,
+                                          sidebarOrder: [group, group, UUID()])
+        precondition(normalized.sidebarOrder.first == group)
+        precondition(Set(normalized.sidebarOrder).count == normalized.sidebarOrder.count)
+        precondition(!normalized.sidebarOrder.contains(members[0]))
+        try store.moveLights([members[0]], to: nil)
+        precondition(store.configuration.sidebarOrder.last == members[0])
+        try store.setLightHidden(initial[1], hidden: true)
+        precondition(!store.configuration.sidebarOrder.contains(initial[1]))
+        try store.setLightHidden(initial[1], hidden: false)
+        precondition(store.configuration.sidebarOrder.last == initial[1])
+        // Folder headers and descendants must resolve to root-level slots,
+        // including adjacent folders without an independent light between them.
+        let otherGroup = UUID()
+        let roots = [initial[1], group, otherGroup]
+        let children = [group: members, otherGroup: [UUID()]]
+        precondition(SidebarOrder.rootInsertion(roots: roots, children: children, hovered: group, afterHeader: false) == 1)
+        precondition(SidebarOrder.rootInsertion(roots: roots, children: children, hovered: group, afterHeader: true) == 2)
+        precondition(SidebarOrder.rootInsertion(roots: roots, children: children, hovered: members[0], afterHeader: true) == 2)
+        precondition(SidebarOrder.rootInsertion(roots: roots, children: children, hovered: otherGroup, afterHeader: false) == 2)
+        precondition(SidebarOrder.rootInsertion(roots: roots, children: children, hovered: otherGroup, afterHeader: true) == 3)
+        precondition(SidebarOrder.rootInsertion(roots: roots, children: children, hovered: UUID(), afterHeader: true) == nil)
+        print("PASS: root insertion works before, after and between folders, including expanded descendants")
+        print("PASS: manual order migrates, persists, preserves settings and relative order; invalid and failed moves are atomic")
+    }
+
+    @MainActor private static func unnamedOrderMigration() throws {
+        let mapping = BrightnessMapping(monitorMin: 20, monitorMax: 90, lightMinPercent: 1, lightMaxPercent: 100)
+        let lights = ["", "Desk", " \n ", "  Bed  "].enumerated().map { index, name in
+            LightConfiguration(name: name, ip: "192.0.2.\(index + 1)", isEnabled: false, mapping: mapping)
+        }
+        let expected = lights.sorted { a, b in
+            let first = LightDraft(configuration: a).displayName
+            let second = LightDraft(configuration: b).displayName
+            let comparison = first.localizedStandardCompare(second)
+            return comparison == .orderedSame ? a.id.uuidString < b.id.uuidString : comparison == .orderedAscending
+        }.map(\.id)
+        func migrate(_ configuration: AppConfiguration) throws -> AppConfiguration {
+            var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(configuration)) as! [String: Any]
+            json.removeValue(forKey: "sidebarOrder")
+            return try JSONDecoder().decode(AppConfiguration.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        let independent = AppConfiguration(monitor: MonitorConfiguration(displayID: 3), lights: lights)
+        let migratedIndependent = try migrate(independent)
+        precondition(migratedIndependent.sidebarOrder == expected)
+        let group = LightGroup(name: "Room", memberIDs: lights.map(\.id), isEnabled: false, mapping: mapping)
+        let grouped = AppConfiguration(monitor: independent.monitor, lights: lights, groups: [group])
+        let migratedGroup = try migrate(grouped)
+        precondition(migratedGroup.groups[0].memberIDs == expected)
+        let manual = AppConfiguration(monitor: independent.monitor, lights: lights, sidebarOrder: lights.map(\.id))
+        let reloaded = try JSONDecoder().decode(AppConfiguration.self, from: JSONEncoder().encode(manual))
+        precondition(reloaded.sidebarOrder == lights.map(\.id), "Existing manual positions must not be sorted again")
+        print("PASS: legacy root and member order use displayed names for empty, whitespace-only and trimmed names")
+    }
+
 }

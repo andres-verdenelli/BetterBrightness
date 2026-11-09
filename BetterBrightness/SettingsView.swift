@@ -11,7 +11,6 @@ struct SettingsView: View {
     @State private var discoveryResponseWindowText: String
     @State private var discoveryAttemptCountText: String
     @State private var lights: [LightDraft]
-    @State private var activeDragID: DragSession.ID?
     @State private var selectedIDs: Set<UUID> = []
     @State private var groups: [LightGroup]
     @State private var expandedGroups: Set<UUID> = []
@@ -29,6 +28,7 @@ struct SettingsView: View {
     @State private var showsDeleteConfirmation = false
     @State private var renamingLightID: UUID?
     @State private var renameText = ""
+    @FocusState private var sidebarRenameFocus: UUID?
     @FocusState private var advancedField: AdvancedField?
 
     private enum AdvancedField: Hashable {
@@ -111,87 +111,109 @@ struct SettingsView: View {
         } message: {
             Text(errorMessage)
         }
-        .alert("Remove Light?", isPresented: $showsDeleteConfirmation,
+        .alert("Delete Light?", isPresented: $showsDeleteConfirmation,
                presenting: lightPendingDeletion) { light in
-            Button("Remove", role: .destructive) { removeLight(light.id) }
+            Button("Delete", role: .destructive) { removeLight(light.id) }
             Button("Cancel", role: .cancel) {}
         } message: { light in
-            Text("\(light.displayName) will be removed from BetterBrightness.")
+            Text("\(light.displayName) will be deleted from BetterBrightness.")
         }
     }
 
     private var sidebar: some View {
-        List(selection: selectionBinding) {
-            ForEach(rootIDs, id: \.self) { id in
-                if let group = groups.first(where: { $0.id == id }) {
-                    groupRow(group)
-                } else {
-                    lightRow(id)
+        OrderedSidebar(
+            roots: rootIDs,
+            children: Dictionary(uniqueKeysWithValues: groups.map { ($0.id, memberIDs($0)) }),
+            selected: selectedIDs, expanded: expandedGroups,
+            content: { id in
+                AnyView(sidebarContent(id).contextMenu {
+                    sidebarContextMenu(selectedIDs.contains(id) ? selectedIDs : [id])
+                })
+            },
+            onSelect: { selectionBinding.wrappedValue = $0 },
+            onExpand: { expandedGroups = $0 },
+            prepareDrag: { finishRename(); return saveConfiguration() },
+            onMove: { ids, parent, index in
+                do {
+                    try configurationStore.reorderSidebar(ids, parent: parent, index: index)
+                    reloadSnapshot()
+                    return true
+                } catch {
+                    errorMessage = error.localizedDescription
+                    showsError = true
+                    return false
                 }
             }
-            if activeDragID != nil && !groups.isEmpty {
-                Label("Make independent", systemImage: "arrow.uturn.backward")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .dropDestination(for: String.self) { items, _ in
-                        activeDragID = nil
-                        return acceptDrop(items, destination: nil)
-                    }
-            }
-        }
-        .listStyle(.sidebar)
-        .contextMenu(forSelectionType: UUID.self) { ids in
-            sidebarContextMenu(ids)
-        } primaryAction: { ids in
-            if ids.count == 1, let id = ids.first { beginRename(id) }
+        )
+    }
+
+    @ViewBuilder private func sidebarContent(_ id: UUID) -> some View {
+        if let group = groups.first(where: { $0.id == id }) {
+            groupRow(group)
+                .font(.system(size: 13))
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        } else if let light = lights.first(where: { $0.id == id }) {
+            sidebarRow(light)
+                .font(.system(size: 13))
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
     }
 
     private func groupRow(_ group: LightGroup) -> some View {
-        DisclosureGroup(isExpanded: expansionBinding(group.id)) {
-            ForEach(memberIDs(group), id: \.self) { id in lightRow(id) }
-        } label: {
+        HStack {
             groupLabel(group)
+            Button {
+                expansionBinding(group.id).wrappedValue.toggle()
+            } label: {
+                Image(systemName: expandedGroups.contains(group.id) ? "chevron.down" : "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .frame(width: 36, height: 32)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Toggle \(group.name)")
         }
+        .foregroundStyle(selectedIDs.contains(group.id) ? Color.white : Color.primary)
         .tag(group.id)
-        .dropDestination(for: String.self) { items, _ in
-            activeDragID = nil
-            return acceptDrop(items, destination: group.id)
-        }
     }
 
     private func groupLabel(_ group: LightGroup) -> some View {
-        Label {
-            HStack {
+        HStack(spacing: 10) {
+            Image(systemName: "folder")
+                .frame(width: 20)
+            if renamingLightID == group.id {
+                TextField("Group name", text: $renameText)
+                    .textFieldStyle(.plain)
+                    .focused($sidebarRenameFocus, equals: group.id)
+                    .onSubmit(finishRename)
+                    .onExitCommand(perform: cancelRename)
+                    .onAppear { sidebarRenameFocus = group.id }
+                    .onChange(of: sidebarRenameFocus) { old, new in
+                        if old == group.id && new != group.id { finishRename() }
+                    }
+            } else {
                 Text(group.name).lineLimit(1)
-                Spacer()
-                Text("\(group.memberIDs.count)").foregroundStyle(.secondary)
             }
-        } icon: { Image(systemName: "folder") }
+            Spacer()
+            Text("\(group.memberIDs.count)")
+                .foregroundStyle(selectedIDs.contains(group.id) ? Color.white.opacity(0.8) : Color.secondary)
+        }
+        .padding(.vertical, 5)
     }
 
     @ViewBuilder private var detail: some View {
         if let id = selectedLightID,
            let index = groups.firstIndex(where: { $0.id == id }) {
             GroupDetailView(group: $groups[index],
-                            members: lights.filter { groups[index].memberIDs.contains($0.id) },
-                            onCommit: { saveConfiguration() },
-                            onSelect: { selectItem($0) },
-                            onUngroup: { groupPendingUngroup = groups[index] })
+                            onCommit: { saveConfiguration() })
                 .id(id)
         } else if let id = selectedLightID,
                   let index = lights.firstIndex(where: { $0.id == id && !$0.isHidden }) {
             LightDetailView(
                 light: $lights[index],
                 group: groups.first { $0.memberIDs.contains(id) },
-                onSelectGroup: { selectItem($0) },
-                onLeaveGroup: { runAction { try configurationStore.moveLights([id], to: nil) } },
-                onHide: { runAction { try configurationStore.setLightHidden(id, hidden: true) } },
-                onRemove: { requestRemoval(lights[index]) },
-                isRenaming: renamingLightID == id,
-                renameText: $renameText,
-                onBeginRename: { beginRename(id) },
-                onFinishRename: finishRename,
-                onCancelRename: cancelRename,
                 onCommit: {
                     guard selectedLightID == id else { return }
                     saveConfiguration()
@@ -218,15 +240,7 @@ struct SettingsView: View {
         selectedIDs = [id]
     }
 
-    private var rootIDs: [UUID] {
-        let entries = groups.map { ($0.id, $0.name) } + lights.filter { light in
-            !light.isHidden && !groups.contains { $0.memberIDs.contains(light.id) }
-        }.map { ($0.id, $0.displayName) }
-        return entries.sorted {
-            let order = $0.1.localizedStandardCompare($1.1)
-            return order == .orderedSame ? $0.0.uuidString < $1.0.uuidString : order == .orderedAscending
-        }.map { $0.0 }
-    }
+    private var rootIDs: [UUID] { configurationStore.configuration.sidebarOrder }
 
     private var sortedGroups: [LightGroup] {
         groups.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -237,8 +251,7 @@ struct SettingsView: View {
     }
 
     private func memberIDs(_ group: LightGroup) -> [UUID] {
-        lights.filter { !$0.isHidden && group.memberIDs.contains($0.id) }
-            .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }.map(\.id)
+        group.memberIDs.filter { id in lights.contains { $0.id == id && !$0.isHidden } }
     }
 
     private func expansionBinding(_ id: UUID) -> Binding<Bool> {
@@ -247,34 +260,9 @@ struct SettingsView: View {
         })
     }
 
-    @ViewBuilder private func lightRow(_ id: UUID) -> some View {
-        if let light = lights.first(where: { $0.id == id }) {
-            sidebarRow(light)
-                .tag(id)
-                .itemProvider {
-                    // List can request this payload during selection; keep it free of UI changes.
-                    let ids = selectedIDs.contains(id) ? selectedLightIDs : [id]
-                    return NSItemProvider(object: ids.map(\.uuidString).sorted().joined(separator: ",") as NSString)
-                }
-                .onDragSessionUpdated { session in
-                    switch session.phase {
-                    case .active:
-                        let ids = selectedIDs.contains(id) ? selectedLightIDs : [id]
-                        if groups.contains(where: { !ids.isDisjoint(with: $0.memberIDs) }) {
-                            activeDragID = session.id
-                        }
-                    case .ended, .dataTransferCompleted:
-                        if activeDragID == session.id { activeDragID = nil }
-                    default:
-                        break
-                    }
-                }
-
-        }
-    }
-
     @ViewBuilder private func sidebarContextMenu(_ ids: Set<UUID>) -> some View {
         if ids.count == 1, let id = ids.first, let group = groups.first(where: { $0.id == id }) {
+            Button("Rename") { beginRename(group.id) }
             Button("Ungroup…", role: .destructive) { groupPendingUngroup = group }
         } else {
             let selectedLights = lights.filter { !$0.isHidden && ids.contains($0.id) }
@@ -285,9 +273,10 @@ struct SettingsView: View {
                 }) {
                     Button("Group Lights…") { beginGroup(lightIDs) }
                 }
-                if !groups.isEmpty {
+                let destinations = sortedGroups.filter { !lightIDs.isSubset(of: $0.memberIDs) }
+                if !destinations.isEmpty {
                     Menu("Move to Group") {
-                        ForEach(sortedGroups) { group in
+                        ForEach(destinations) { group in
                             Button(group.name) {
                                 if runAction({ try configurationStore.moveLights(lightIDs, to: group.id) }) {
                                     expandedGroups.insert(group.id)
@@ -304,10 +293,12 @@ struct SettingsView: View {
                 if let light = selectedLights.first, lightIDs.count == 1 {
                     Divider()
                     Button("Rename") { beginRename(light.id) }
+                    if !groups.contains(where: { $0.memberIDs.contains(light.id) }) {
                     Button("Hide Light") {
                         runAction { try configurationStore.setLightHidden(light.id, hidden: true) }
                     }
-                    Button("Remove Light…", role: .destructive) { requestRemoval(light) }
+                        Button("Delete Light…", role: .destructive) { requestRemoval(light) }
+                    }
                 }
             }
         }
@@ -315,16 +306,6 @@ struct SettingsView: View {
 
     private var selectedLightIDs: Set<UUID> {
         Set(lights.filter { !$0.isHidden && selectedIDs.contains($0.id) }.map(\.id))
-    }
-
-    private func acceptDrop(_ items: [String], destination: UUID?) -> Bool {
-        let components = items.flatMap { $0.split(separator: ",").map(String.init) }
-        let ids = Set(components.compactMap(UUID.init(uuidString:)))
-        guard components.count == ids.count, !ids.isEmpty,
-              ids.allSatisfy({ id in lights.contains { $0.id == id && !$0.isHidden } }) else { return false }
-        let succeeded = runAction { try configurationStore.moveLights(ids, to: destination) }
-        if succeeded, let destination { expandedGroups.insert(destination) }
-        return succeeded
     }
 
     private func beginGroup(_ ids: Set<UUID>) {
@@ -405,11 +386,25 @@ struct SettingsView: View {
     private func sidebarRow(_ light: LightDraft) -> some View {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: light.isIPAddressVerified ? "lightbulb" : "exclamationmark.triangle")
-                .foregroundStyle(light.isIPAddressVerified ? Color.secondary : Color.orange)
+                .foregroundStyle(selectedIDs.contains(light.id) ? Color.white : (light.isIPAddressVerified ? Color.secondary : Color.orange))
+                .frame(width: 20)
             VStack(alignment: .leading, spacing: 4) {
-                Text(light.displayName)
-                    .lineLimit(1)
-                    .help(light.displayName)
+                if renamingLightID == light.id {
+                    TextField("Light name", text: $renameText)
+                        .textFieldStyle(.plain)
+                        .focused($sidebarRenameFocus, equals: light.id)
+                        .onSubmit(finishRename)
+                        .onExitCommand(perform: cancelRename)
+                        .onAppear { sidebarRenameFocus = light.id }
+                        .onChange(of: sidebarRenameFocus) { old, new in
+                            if old == light.id && new != light.id { finishRename() }
+                        }
+                } else {
+                    Text(light.displayName)
+                        .foregroundStyle(selectedIDs.contains(light.id) ? Color.white : Color.primary)
+                        .lineLimit(1)
+                        .help(light.displayName)
+                }
                 if !light.isIPAddressVerified {
                     Text("Waiting for rediscovery")
                         .font(.caption)
@@ -434,17 +429,23 @@ struct SettingsView: View {
 
     private func beginRename(_ id: UUID) {
         guard renamingLightID != id,
-              let light = lights.first(where: { $0.id == id }) else { return }
+              let name = lights.first(where: { $0.id == id })?.name ?? groups.first(where: { $0.id == id })?.name else { return }
         finishRename()
         if selectedLightID != id {
             guard saveConfiguration() else { return }
             selectedIDs = [id]
         }
-        renameText = light.name
+        renameText = name
         renamingLightID = id
     }
 
     private func finishRename() {
+        if let id = renamingLightID, var group = groups.first(where: { $0.id == id }) {
+            group.name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+            renamingLightID = nil
+            runAction { try configurationStore.updateGroup(group) }
+            return
+        }
         guard let id = renamingLightID,
               let index = lights.firstIndex(where: { $0.id == id }) else { return }
         lights[index].name = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -681,12 +682,14 @@ struct SettingsView: View {
     }
 
     private func requestRemoval(_ light: LightDraft) {
+        guard !groups.contains(where: { $0.memberIDs.contains(light.id) }) else { return }
         cancelRename()
         lightPendingDeletion = light
         showsDeleteConfirmation = true
     }
 
     private func removeLight(_ id: UUID) {
+        guard !configurationStore.configuration.groups.contains(where: { $0.memberIDs.contains(id) }) else { return }
         if !configurationStore.configuration.lights.contains(where: { $0.id == id }) {
             lights.removeAll { $0.id == id }
             selectedIDs.remove(id)
@@ -820,17 +823,7 @@ private struct SettingsWindowSupport: NSViewRepresentable {
 private struct LightDetailView: View {
     @Binding var light: LightDraft
     let group: LightGroup?
-    let onSelectGroup: (UUID) -> Void
-    let onLeaveGroup: () -> Void
-    let onHide: () -> Void
-    let onRemove: () -> Void
-    let isRenaming: Bool
-    @Binding var renameText: String
-    let onBeginRename: () -> Void
-    let onFinishRename: () -> Void
-    let onCancelRename: () -> Void
     let onCommit: () -> Void
-    @FocusState private var isNameFocused: Bool
 
     private let syncHelp = "When on, this light follows brightness changes from your selected BetterDisplay monitor. Turn it off to stop sending brightness updates to this light."
 
@@ -844,12 +837,7 @@ private struct LightDetailView: View {
 
     var body: some View {
         Form {
-            if let group {
-                Section {
-                    Button("Brightness controlled by \(group.name)") { onSelectGroup(group.id) }
-                    Button("Remove from Group", action: onLeaveGroup)
-                }
-            } else {
+            if group == nil {
             Section {
                 HStack(spacing: 12) {
                     Text("Sync brightness")
@@ -886,70 +874,23 @@ private struct LightDetailView: View {
 
             Section("Light") {
                 LabeledContent("Name") {
-                    nameEditor.multilineTextAlignment(.trailing)
+                    Text(light.displayName).multilineTextAlignment(.trailing)
                 }
                 LabeledContent("IP address", value: light.ip)
                 if let mac = light.macAddress {
                     LabeledContent("MAC address", value: WiZMACAddress.display(mac))
                 }
             }
-            Section("Actions") {
-                Button("Hide Light", action: onHide)
-                Button("Remove Light…", role: .destructive, action: onRemove)
-                Text("Hidden lights can be restored in Advanced Settings with Sync off.")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
         }
         .formStyle(.grouped)
         .navigationTitle(light.displayName)
-        .onChange(of: isNameFocused) { wasFocused, focused in
-            if wasFocused && !focused && isRenaming { onFinishRename() }
-        }
     }
-
-    @ViewBuilder
-    private var nameEditor: some View {
-        if isRenaming {
-            TextField("Light name", text: $renameText)
-                .labelsHidden()
-                .textFieldStyle(.plain)
-                .focused($isNameFocused)
-                .onSubmit(onFinishRename)
-                .onExitCommand(perform: onCancelRename)
-                .onKeyPress(.escape) {
-                    onCancelRename()
-                    return .handled
-                }
-                .onAppear {
-                    DispatchQueue.main.async { isNameFocused = true }
-                }
-                .accessibilityLabel("Light name")
-        } else {
-            Button(action: onBeginRename) {
-                HStack(spacing: 6) {
-                    Text(light.displayName).lineLimit(1)
-                    Image(systemName: "pencil")
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .help("Rename light")
-            .accessibilityLabel("Rename \(light.displayName)")
-        }
-    }
-
-
 }
+
 
 private struct GroupDetailView: View {
     @Binding var group: LightGroup
-    let members: [LightDraft]
     let onCommit: () -> Void
-    let onSelect: (UUID) -> Void
-    let onUngroup: () -> Void
-    @FocusState private var nameFocused: Bool
 
     private func value(_ keyPath: KeyPath<BrightnessMapping, Double>) -> Binding<Int> {
         Binding(get: { Int(group.mapping[keyPath: keyPath].rounded()) }, set: { value in
@@ -964,8 +905,7 @@ private struct GroupDetailView: View {
 
     var body: some View {
         Form {
-            Section("Group") {
-                TextField("Group name", text: $group.name).focused($nameFocused).onSubmit(onCommit)
+            Section {
                 Toggle("Sync brightness", isOn: $group.isEnabled)
                     .toggleStyle(.switch).onChange(of: group.isEnabled) { onCommit() }
             }
@@ -977,25 +917,8 @@ private struct GroupDetailView: View {
                 )
             } header: { Text("Follow monitor brightness") }
               footer: { Text("These settings control every member. Offline lights do not stop the others from syncing.") }
-            Section("Members") {
-                ForEach(members.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }) { light in
-                    Button { onSelect(light.id) } label: {
-                        HStack {
-                            Label(light.displayName, systemImage: "lightbulb")
-                            Spacer()
-                            Text(light.isIPAddressVerified ? light.ip : "Waiting for rediscovery")
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            Section {
-                Button("Ungroup…", role: .destructive, action: onUngroup)
-            }
         }
         .formStyle(.grouped)
-        .onChange(of: nameFocused) { was, now in if was && !now { onCommit() } }
     }
 
 
