@@ -84,6 +84,7 @@ struct DiscoveryControllerTests {
         try testDiscoveryOnly()
         try testNumberedNames()
         try LightDraftTests.run()
+        try LightGroupTests.run()
     }
     @MainActor
     private static func testDiscoveryOnly() throws {

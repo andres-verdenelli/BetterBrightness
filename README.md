@@ -30,7 +30,7 @@ The app is intentionally small and native. The menu bar panel contains Pause or 
 - Configurable monitor and light brightness ranges
 - User-facing light percentages from 1% to 100%, abstracting WiZ protocol values
 - Configurable discovery attempts and response windows
-- Persistent settings stored locally with `UserDefaults`
+- Persistent settings stored locally with atomic file writes and migration from earlier `UserDefaults` settings
 - Pause that keeps monitoring brightness while suppressing light commands
 - Optional Launch at Login, controlled from Settings through macOS
 
@@ -72,6 +72,30 @@ For regular local installation, create a signed build in Xcode and move `BetterB
 Reusable developer and local maintenance commands live in `scripts/` and are versioned with the project, even though they are not included in the installed app. Build products, caches, personal settings, and installation backups stay outside version control. Agent instructions in [`AGENTS.md`](AGENTS.md) point to the relevant maintenance procedures.
 
 For UI review, run `bash scripts/preview-ui.sh`. It builds the current checkout as a signed Debug preview, restarts that preview, and opens Settings automatically. The preview uses a separate bundle identifier and preferences; it does not replace or quit `/Applications/BetterBrightness.app`. Build products and logs are kept in a temporary directory. The `--preview-settings` launch option is available only in Debug builds.
+
+For a simulated groups preview, use:
+
+```bash
+bash scripts/preview-ui.sh --groups-demo
+```
+
+This uses `andydev.BetterBrightness.groupsPreview`, separate demo preferences, four example lights with different settings, and an expandable Studio group. It does not listen to BetterDisplay, discover devices, send UDP, or allow Launch at Login. Demo changes persist across launches. The default preview command runs the real discovery and control code with separate settings; pause other controlling instances before testing real lights with it.
+
+To verify grouping manually in the demo:
+
+1. Select Desk and Floor with ⌘ or ⇧, right-click, and choose **Group Lights…**. Confirm Desk is the default settings source; switch to Floor and create a uniquely named group.
+2. Expand/collapse the folder. Select the folder to edit its name, Sync and brightness mapping. Select a member to check that only its name, IP, MAC and individual actions appear, with a link back to its group.
+3. Use **Move to Group** or drag lights onto another folder, including a selection of grouped and independent lights. Drag a member onto **Make independent** (visible while dragging), or choose **Remove from Group**; its last shared mapping should remain with Sync on.
+4. Hide a member, then restore it under **Advanced Settings → Hidden Lights**; it returns independent with Sync off. Ungroup a folder and verify that its former members keep its mapping with Sync on.
+5. Remove or move the last two members one by one: a one-member folder remains, an empty folder disappears. Relaunch to check persistence.
+
+Automated checks (`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer bash Tests/run.sh`) cover legacy decoding, the membership lifecycle, discovery with an IP change, actual filesystem errors, injected commit failures, and the controller’s send loop with an injected transport. These checks do not prove physical light behavior. For that separate check, use one controlling instance, discover at least two real lights, group them, change monitor brightness across both mapping endpoints, then take one light offline and confirm that the others still respond. Sending UDP successfully is not confirmation from the device; observe the lamps.
+
+### Light groups
+
+Select at least two independent lights in the sidebar and choose **Group Lights…**. Group names must be nonempty and unique, ignoring case and outer whitespace. **Use settings from** supplies the initial shared mapping and Sync. Groups cannot nest or share members. Independent lights and groups share one alphabetical list; members sort by name inside their folder. Sidebar rows show names only; IP and MAC remain in the detail panel.
+
+Group Sync and mapping are the only effective settings for a member. Moving into a group adopts its settings. Removing a member or ungrouping preserves the final mapping and enables Sync. Hiding detaches a member, keeps the mapping and disables Sync; restoring leaves it independent with Sync off. Membership uses persistent light UUIDs, so discovery and IP changes preserve it. All membership and associated settings changes are written together before the new configuration is published.
 
 ### Personal updates from GitHub
 
@@ -135,7 +159,7 @@ BetterBrightness operates locally:
 
 - It does not require an account.
 - It does not include analytics or telemetry.
-- Settings stay on the Mac in `UserDefaults`.
+- Settings stay on the Mac in an atomically written `Configuration.json` under the app’s Application Support directory (inside its sandbox container). Earlier `UserDefaults` settings are imported when no file exists; new saves use the file.
 - WiZ discovery uses UDP broadcast on port `38899`.
 - Brightness commands are sent directly to enabled lights on the local network.
 

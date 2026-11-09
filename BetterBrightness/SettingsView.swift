@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct SettingsView: View {
+    @Environment(\.isGroupPreview) private var isGroupPreview
     @ObservedObject var configurationStore: ConfigurationStore
     @ObservedObject var discovery: DiscoveryController
     @ObservedObject var launchAtLogin: LaunchAtLoginController
@@ -10,7 +11,16 @@ struct SettingsView: View {
     @State private var discoveryResponseWindowText: String
     @State private var discoveryAttemptCountText: String
     @State private var lights: [LightDraft]
-    @State private var selectedLightID: UUID?
+    @State private var activeDragID: DragSession.ID?
+    @State private var selectedIDs: Set<UUID> = []
+    @State private var groups: [LightGroup]
+    @State private var expandedGroups: Set<UUID> = []
+    @State private var showsCreateGroup = false
+    @State private var groupName = ""
+    @State private var groupSourceID: UUID?
+    @State private var groupMemberIDs: Set<UUID> = []
+    @State private var groupPendingUngroup: LightGroup?
+    private var selectedLightID: UUID? { selectedIDs.count == 1 ? selectedIDs.first : nil }
     @State private var isSidebarVisible = true
     @State private var showsAdvanced = false
     @State private var errorMessage = ""
@@ -38,57 +48,19 @@ struct SettingsView: View {
             initialValue: String(configuration.discovery.attemptCount)
         )
         _lights = State(initialValue: configuration.lights.map { LightDraft(configuration: $0) })
-        _selectedLightID = State(initialValue:
-            configuration.lights.first(where: \.isEnabled)?.id
-                ?? configuration.lights.first?.id
-        )
+        _groups = State(initialValue: configuration.groups)
+        _expandedGroups = State(initialValue: Set(configuration.groups.map(\.id)))
+        _selectedIDs = State(initialValue: Set(configuration.lights.first(where: { !$0.isHidden }).map { [$0.id] } ?? []))
     }
 
     var body: some View {
         SettingsSplitView(isSidebarVisible: $isSidebarVisible) {
-            List(selection: selectionBinding) {
-                Section("Lights") {
-                    ForEach(sortedLightIDs, id: \.self) { id in
-                        if let light = lights.first(where: { $0.id == id }) {
-                            sidebarRow(light)
-                                .tag(id)
-                                .contextMenu {
-                                    Button("Remove Light…", role: .destructive) {
-                                        requestRemoval(light)
-                                    }
-                                }
-                        }
-                    }
-                }
-            }
-            .listStyle(.sidebar)
+            sidebar
         } detail: {
-            if let id = selectedLightID,
-               let index = lights.firstIndex(where: { $0.id == id }) {
-                LightDetailView(
-                    light: $lights[index],
-                    isRenaming: renamingLightID == id,
-                    renameText: $renameText,
-                    onBeginRename: { beginRename(id) },
-                    onFinishRename: finishRename,
-                    onCancelRename: cancelRename,
-                    onCommit: {
-                        // A selection change has already committed the previous draft.
-                        guard selectedLightID == id else { return }
-                        saveConfiguration()
-                    }
-                )
-                .id(id)
-            } else {
-                ContentUnavailableView(
-                    lights.isEmpty ? "No Lights" : "Select a Light",
-                    systemImage: "lightbulb",
-                    description: Text("Open Advanced Settings with the gear button, then choose Discover Lights to find lights on your network.")
-                )
-            }
+            detail
         }
         .ignoresSafeArea(.container, edges: .top)
-        .navigationTitle(lights.first(where: { $0.id == selectedLightID })?.displayName ?? "Settings")
+        .navigationTitle(groups.first(where: { $0.id == selectedLightID })?.name ?? lights.first(where: { $0.id == selectedLightID })?.displayName ?? "Settings")
         .toolbar {
             ToolbarItem(id: "sidebarToggle", placement: .navigation) {
                 Button(
@@ -116,6 +88,18 @@ struct SettingsView: View {
         .onReceive(configurationStore.$configuration) { configuration in
             mergeDiscoveryChangesIntoDrafts(configuration)
         }
+        .sheet(isPresented: $showsCreateGroup) { createGroupSheet }
+        .confirmationDialog("Ungroup Lights?", isPresented: Binding(
+            get: { groupPendingUngroup != nil },
+            set: { if !$0 { groupPendingUngroup = nil } }
+        ), presenting: groupPendingUngroup) { group in
+            Button("Ungroup", role: .destructive) {
+                runAction { try configurationStore.ungroup(group.id) }
+                groupPendingUngroup = nil
+            }
+        } message: { group in
+            Text("The lights in \(group.name) will keep its brightness settings with Sync on.")
+        }
         .sheet(isPresented: $showsAdvanced) {
             advancedSettings
         }
@@ -136,12 +120,286 @@ struct SettingsView: View {
         }
     }
 
-    private var selectionBinding: Binding<UUID?> {
-        Binding(get: { selectedLightID }, set: { id in
+    private var sidebar: some View {
+        List(selection: selectionBinding) {
+            ForEach(rootIDs, id: \.self) { id in
+                if let group = groups.first(where: { $0.id == id }) {
+                    groupRow(group)
+                } else {
+                    lightRow(id)
+                }
+            }
+            if activeDragID != nil && !groups.isEmpty {
+                Label("Make independent", systemImage: "arrow.uturn.backward")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .dropDestination(for: String.self) { items, _ in
+                        activeDragID = nil
+                        return acceptDrop(items, destination: nil)
+                    }
+            }
+        }
+        .listStyle(.sidebar)
+        .contextMenu(forSelectionType: UUID.self) { ids in
+            sidebarContextMenu(ids)
+        } primaryAction: { ids in
+            if ids.count == 1, let id = ids.first { beginRename(id) }
+        }
+    }
+
+    private func groupRow(_ group: LightGroup) -> some View {
+        DisclosureGroup(isExpanded: expansionBinding(group.id)) {
+            ForEach(memberIDs(group), id: \.self) { id in lightRow(id) }
+        } label: {
+            groupLabel(group)
+        }
+        .tag(group.id)
+        .dropDestination(for: String.self) { items, _ in
+            activeDragID = nil
+            return acceptDrop(items, destination: group.id)
+        }
+    }
+
+    private func groupLabel(_ group: LightGroup) -> some View {
+        Label {
+            HStack {
+                Text(group.name).lineLimit(1)
+                Spacer()
+                Text("\(group.memberIDs.count)").foregroundStyle(.secondary)
+            }
+        } icon: { Image(systemName: "folder") }
+    }
+
+    @ViewBuilder private var detail: some View {
+        if let id = selectedLightID,
+           let index = groups.firstIndex(where: { $0.id == id }) {
+            GroupDetailView(group: $groups[index],
+                            members: lights.filter { groups[index].memberIDs.contains($0.id) },
+                            onCommit: { saveConfiguration() },
+                            onSelect: { selectItem($0) },
+                            onUngroup: { groupPendingUngroup = groups[index] })
+                .id(id)
+        } else if let id = selectedLightID,
+                  let index = lights.firstIndex(where: { $0.id == id && !$0.isHidden }) {
+            LightDetailView(
+                light: $lights[index],
+                group: groups.first { $0.memberIDs.contains(id) },
+                onSelectGroup: { selectItem($0) },
+                onLeaveGroup: { runAction { try configurationStore.moveLights([id], to: nil) } },
+                onHide: { runAction { try configurationStore.setLightHidden(id, hidden: true) } },
+                onRemove: { requestRemoval(lights[index]) },
+                isRenaming: renamingLightID == id,
+                renameText: $renameText,
+                onBeginRename: { beginRename(id) },
+                onFinishRename: finishRename,
+                onCancelRename: cancelRename,
+                onCommit: {
+                    guard selectedLightID == id else { return }
+                    saveConfiguration()
+                }
+            )
+            .id(id)
+        } else {
+            ContentUnavailableView(selectedIDs.count > 1 ? "\(selectedIDs.count) Items Selected" : "Select a Light or Group",
+                                   systemImage: "folder")
+        }
+    }
+
+    private var selectionBinding: Binding<Set<UUID>> {
+        Binding(get: { selectedIDs }, set: { ids in
             finishRename()
-            guard id != selectedLightID, saveConfiguration() else { return }
-            selectedLightID = id
+            guard ids != selectedIDs, saveConfiguration() else { return }
+            selectedIDs = ids
         })
+    }
+
+    private func selectItem(_ id: UUID) {
+        finishRename()
+        guard saveConfiguration() else { return }
+        selectedIDs = [id]
+    }
+
+    private var rootIDs: [UUID] {
+        let entries = groups.map { ($0.id, $0.name) } + lights.filter { light in
+            !light.isHidden && !groups.contains { $0.memberIDs.contains(light.id) }
+        }.map { ($0.id, $0.displayName) }
+        return entries.sorted {
+            let order = $0.1.localizedStandardCompare($1.1)
+            return order == .orderedSame ? $0.0.uuidString < $1.0.uuidString : order == .orderedAscending
+        }.map { $0.0 }
+    }
+
+    private var sortedGroups: [LightGroup] {
+        groups.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    private var independentLightIDs: [UUID] {
+        sortedLightIDs.filter { id in !groups.contains { $0.memberIDs.contains(id) } }
+    }
+
+    private func memberIDs(_ group: LightGroup) -> [UUID] {
+        lights.filter { !$0.isHidden && group.memberIDs.contains($0.id) }
+            .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }.map(\.id)
+    }
+
+    private func expansionBinding(_ id: UUID) -> Binding<Bool> {
+        Binding(get: { expandedGroups.contains(id) }, set: {
+            if $0 { expandedGroups.insert(id) } else { expandedGroups.remove(id) }
+        })
+    }
+
+    @ViewBuilder private func lightRow(_ id: UUID) -> some View {
+        if let light = lights.first(where: { $0.id == id }) {
+            sidebarRow(light)
+                .tag(id)
+                .itemProvider {
+                    // List can request this payload during selection; keep it free of UI changes.
+                    let ids = selectedIDs.contains(id) ? selectedLightIDs : [id]
+                    return NSItemProvider(object: ids.map(\.uuidString).sorted().joined(separator: ",") as NSString)
+                }
+                .onDragSessionUpdated { session in
+                    switch session.phase {
+                    case .active:
+                        let ids = selectedIDs.contains(id) ? selectedLightIDs : [id]
+                        if groups.contains(where: { !ids.isDisjoint(with: $0.memberIDs) }) {
+                            activeDragID = session.id
+                        }
+                    case .ended, .dataTransferCompleted:
+                        if activeDragID == session.id { activeDragID = nil }
+                    default:
+                        break
+                    }
+                }
+
+        }
+    }
+
+    @ViewBuilder private func sidebarContextMenu(_ ids: Set<UUID>) -> some View {
+        if ids.count == 1, let id = ids.first, let group = groups.first(where: { $0.id == id }) {
+            Button("Ungroup…", role: .destructive) { groupPendingUngroup = group }
+        } else {
+            let selectedLights = lights.filter { !$0.isHidden && ids.contains($0.id) }
+            let lightIDs = Set(selectedLights.map(\.id))
+            if !lightIDs.isEmpty && lightIDs.count == ids.count {
+                if lightIDs.count >= 2 && lightIDs.allSatisfy({ id in
+                    !groups.contains { $0.memberIDs.contains(id) }
+                }) {
+                    Button("Group Lights…") { beginGroup(lightIDs) }
+                }
+                if !groups.isEmpty {
+                    Menu("Move to Group") {
+                        ForEach(sortedGroups) { group in
+                            Button(group.name) {
+                                if runAction({ try configurationStore.moveLights(lightIDs, to: group.id) }) {
+                                    expandedGroups.insert(group.id)
+                                }
+                            }
+                        }
+                    }
+                }
+                if lightIDs.contains(where: { id in groups.contains { $0.memberIDs.contains(id) } }) {
+                    Button("Remove from Group") {
+                        runAction { try configurationStore.moveLights(lightIDs, to: nil) }
+                    }
+                }
+                if let light = selectedLights.first, lightIDs.count == 1 {
+                    Divider()
+                    Button("Rename") { beginRename(light.id) }
+                    Button("Hide Light") {
+                        runAction { try configurationStore.setLightHidden(light.id, hidden: true) }
+                    }
+                    Button("Remove Light…", role: .destructive) { requestRemoval(light) }
+                }
+            }
+        }
+    }
+
+    private var selectedLightIDs: Set<UUID> {
+        Set(lights.filter { !$0.isHidden && selectedIDs.contains($0.id) }.map(\.id))
+    }
+
+    private func acceptDrop(_ items: [String], destination: UUID?) -> Bool {
+        let components = items.flatMap { $0.split(separator: ",").map(String.init) }
+        let ids = Set(components.compactMap(UUID.init(uuidString:)))
+        guard components.count == ids.count, !ids.isEmpty,
+              ids.allSatisfy({ id in lights.contains { $0.id == id && !$0.isHidden } }) else { return false }
+        let succeeded = runAction { try configurationStore.moveLights(ids, to: destination) }
+        if succeeded, let destination { expandedGroups.insert(destination) }
+        return succeeded
+    }
+
+    private func beginGroup(_ ids: Set<UUID>) {
+        guard saveConfiguration() else { return }
+        groupMemberIDs = ids
+        groupSourceID = lights.filter { ids.contains($0.id) }
+            .sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }.first?.id
+        groupName = ""
+        showsCreateGroup = true
+    }
+
+    private var validGroupName: Bool {
+        let name = groupName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !name.isEmpty && !groups.contains { $0.name.lowercased() == name.lowercased() }
+    }
+
+    private var createGroupSheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Group Lights").font(.title2)
+            TextField("Group name", text: $groupName)
+            Text("Lights").font(.headline)
+            ForEach(lights.filter { groupMemberIDs.contains($0.id) }.sorted {
+                $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+            }) { light in Label(light.displayName, systemImage: "lightbulb") }
+            Picker("Use settings from", selection: $groupSourceID) {
+                ForEach(lights.filter { groupMemberIDs.contains($0.id) }.sorted {
+                    $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+                }) { light in Text(light.displayName).tag(Optional(light.id)) }
+            }
+            Text("The selected light supplies brightness settings and Sync for every member.")
+                .font(.caption).foregroundStyle(.secondary)
+            if !groupName.isEmpty && !validGroupName {
+                Text("Use a nonempty name that differs from other groups.").foregroundStyle(.red)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { showsCreateGroup = false }
+                    .keyboardShortcut(.cancelAction)
+                Button("Create Group") {
+                    guard let source = groupSourceID else { return }
+                    if runAction({
+                        let id = try configurationStore.createGroup(name: groupName, memberIDs: groupMemberIDs, sourceID: source)
+                        selectedIDs = [id]
+                        expandedGroups.insert(id)
+                    }) { showsCreateGroup = false }
+                }
+                .disabled(!validGroupName || groupSourceID == nil)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24).frame(width: 430)
+        .alert("Unable to Save", isPresented: $showsError) { Button("OK", role: .cancel) {} }
+            message: { Text(errorMessage) }
+    }
+
+    /// Flush edits first; store actions publish a complete snapshot only after a successful save.
+    @discardableResult private func runAction(_ action: () throws -> Void) -> Bool {
+        finishRename()
+        guard saveConfiguration() else { return false }
+        do {
+            try action()
+            reloadSnapshot()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            showsError = true
+            return false
+        }
+    }
+
+    private func reloadSnapshot() {
+        let configuration = configurationStore.configuration
+        lights = configuration.lights.map(LightDraft.init(configuration:))
+        groups = configuration.groups
+        selectedIDs = selectedIDs.intersection(Set(lights.filter { !$0.isHidden }.map(\.id) + groups.map(\.id)))
     }
 
     private func sidebarRow(_ light: LightDraft) -> some View {
@@ -162,10 +420,11 @@ struct SettingsView: View {
             Spacer(minLength: 0)
         }
         .padding(.vertical, 5)
+        .contentShape(Rectangle())
     }
 
     private var sortedLightIDs: [UUID] {
-        lights.sorted { first, second in
+        lights.filter { !$0.isHidden }.sorted { first, second in
             if first.isEnabled != second.isEnabled { return first.isEnabled }
             let comparison = first.displayName.localizedStandardCompare(second.displayName)
             if comparison != .orderedSame { return comparison == .orderedAscending }
@@ -179,7 +438,7 @@ struct SettingsView: View {
         finishRename()
         if selectedLightID != id {
             guard saveConfiguration() else { return }
-            selectedLightID = id
+            selectedIDs = [id]
         }
         renameText = light.name
         renamingLightID = id
@@ -201,7 +460,11 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             Form {
                 Section {
-                    LaunchAtLoginControl(controller: launchAtLogin)
+                    if isGroupPreview {
+                        Text("Simulated preview · device control and Launch at Login are disabled.")
+                    } else {
+                        LaunchAtLoginControl(controller: launchAtLogin)
+                    }
                 }
                 Section {
                     TextField("BetterDisplay display ID", text: displayIDBinding)
@@ -235,6 +498,19 @@ struct SettingsView: View {
                     Text("Discovery")
                 } footer: {
                     Text("Default: 500 ms and 3 attempts. Longer windows and more attempts make discovery take longer. Use Discover Lights above to search your network.")
+                }
+                Section("Hidden Lights") {
+                    let hidden = lights.filter(\.isHidden)
+                    if hidden.isEmpty { Text("No hidden lights").foregroundStyle(.secondary) }
+                    ForEach(hidden) { light in
+                        LabeledContent(light.displayName) {
+                            Button("Show Light") {
+                                runAction { try configurationStore.setLightHidden(light.id, hidden: false) }
+                            }
+                        }
+                    }
+                    Text("Restored lights are independent with Sync off.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -283,7 +559,8 @@ struct SettingsView: View {
             try configurationStore.save(
                 displayID: displayID,
                 lights: lights.map(\.configuration),
-                discovery: discoveryConfiguration
+                discovery: discoveryConfiguration,
+                groups: groups
             )
             return true
         } catch {
@@ -410,14 +687,16 @@ struct SettingsView: View {
     }
 
     private func removeLight(_ id: UUID) {
-        guard let removedIndex = lights.firstIndex(where: { $0.id == id }) else { return }
-        let removed = lights.remove(at: removedIndex)
-        guard saveConfiguration() else {
-            lights.insert(removed, at: removedIndex)
+        if !configurationStore.configuration.lights.contains(where: { $0.id == id }) {
+            lights.removeAll { $0.id == id }
+            selectedIDs.remove(id)
+            lightPendingDeletion = nil
             return
         }
-        if selectedLightID == id { selectedLightID = sortedLightIDs.first }
-        lightPendingDeletion = nil
+        if runAction({ try configurationStore.removeLight(id) }) {
+            if selectedIDs.isEmpty, let first = sortedLightIDs.first { selectedIDs = [first] }
+            lightPendingDeletion = nil
+        }
     }
 }
 
@@ -540,6 +819,11 @@ private struct SettingsWindowSupport: NSViewRepresentable {
 
 private struct LightDetailView: View {
     @Binding var light: LightDraft
+    let group: LightGroup?
+    let onSelectGroup: (UUID) -> Void
+    let onLeaveGroup: () -> Void
+    let onHide: () -> Void
+    let onRemove: () -> Void
     let isRenaming: Bool
     @Binding var renameText: String
     let onBeginRename: () -> Void
@@ -560,6 +844,12 @@ private struct LightDetailView: View {
 
     var body: some View {
         Form {
+            if let group {
+                Section {
+                    Button("Brightness controlled by \(group.name)") { onSelectGroup(group.id) }
+                    Button("Remove from Group", action: onLeaveGroup)
+                }
+            } else {
             Section {
                 HStack(spacing: 12) {
                     Text("Sync brightness")
@@ -592,6 +882,8 @@ private struct LightDetailView: View {
                 }
             }
 
+            }
+
             Section("Light") {
                 LabeledContent("Name") {
                     nameEditor.multilineTextAlignment(.trailing)
@@ -600,6 +892,12 @@ private struct LightDetailView: View {
                 if let mac = light.macAddress {
                     LabeledContent("MAC address", value: WiZMACAddress.display(mac))
                 }
+            }
+            Section("Actions") {
+                Button("Hide Light", action: onHide)
+                Button("Remove Light…", role: .destructive, action: onRemove)
+                Text("Hidden lights can be restored in Advanced Settings with Sync off.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
@@ -640,6 +938,64 @@ private struct LightDetailView: View {
             .help("Rename light")
             .accessibilityLabel("Rename \(light.displayName)")
         }
+    }
+
+
+}
+
+private struct GroupDetailView: View {
+    @Binding var group: LightGroup
+    let members: [LightDraft]
+    let onCommit: () -> Void
+    let onSelect: (UUID) -> Void
+    let onUngroup: () -> Void
+    @FocusState private var nameFocused: Bool
+
+    private func value(_ keyPath: KeyPath<BrightnessMapping, Double>) -> Binding<Int> {
+        Binding(get: { Int(group.mapping[keyPath: keyPath].rounded()) }, set: { value in
+            let m = group.mapping
+            group.mapping = BrightnessMapping(
+                monitorMin: keyPath == \.monitorMin ? Double(value) : m.monitorMin,
+                monitorMax: keyPath == \.monitorMax ? Double(value) : m.monitorMax,
+                lightMinPercent: keyPath == \.lightMinPercent ? Double(value) : m.lightMinPercent,
+                lightMaxPercent: keyPath == \.lightMaxPercent ? Double(value) : m.lightMaxPercent)
+        })
+    }
+
+    var body: some View {
+        Form {
+            Section("Group") {
+                TextField("Group name", text: $group.name).focused($nameFocused).onSubmit(onCommit)
+                Toggle("Sync brightness", isOn: $group.isEnabled)
+                    .toggleStyle(.switch).onChange(of: group.isEnabled) { onCommit() }
+            }
+            Section {
+                FollowBrightnessEditor(
+                    monitorMin: value(\.monitorMin), monitorMax: value(\.monitorMax),
+                    lightMin: value(\.lightMinPercent), lightMax: value(\.lightMaxPercent),
+                    onCommit: onCommit
+                )
+            } header: { Text("Follow monitor brightness") }
+              footer: { Text("These settings control every member. Offline lights do not stop the others from syncing.") }
+            Section("Members") {
+                ForEach(members.sorted { $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending }) { light in
+                    Button { onSelect(light.id) } label: {
+                        HStack {
+                            Label(light.displayName, systemImage: "lightbulb")
+                            Spacer()
+                            Text(light.isIPAddressVerified ? light.ip : "Waiting for rediscovery")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Section {
+                Button("Ungroup…", role: .destructive, action: onUngroup)
+            }
+        }
+        .formStyle(.grouped)
+        .onChange(of: nameFocused) { was, now in if was && !now { onCommit() } }
     }
 
 

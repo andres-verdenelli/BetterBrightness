@@ -2,7 +2,14 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+preview_args=(--preview-settings)
+preview_bundle=andydev.BetterBrightness.sidebarPreview
 preview_root="${TMPDIR:-/tmp}/BetterBrightness-sidebar-preview"
+if [[ "${1:-}" == "--groups-demo" ]]; then
+    preview_args+=(--group-preview)
+    preview_bundle=andydev.BetterBrightness.groupsPreview
+    preview_root="${TMPDIR:-/tmp}/BetterBrightness-groups-preview"
+fi
 mkdir -p "$preview_root"
 preview_root="$(cd "$preview_root" && pwd -P)"
 preview_app="$preview_root/Build/Products/Debug/BetterBrightness.app"
@@ -13,7 +20,7 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Develope
 echo "Building isolated UI preview…"
 if ! xcodebuild -project "$repo_root/BetterBrightness.xcodeproj" \
     -scheme BetterBrightness -configuration Debug -derivedDataPath "$preview_root" \
-    PRODUCT_BUNDLE_IDENTIFIER=andydev.BetterBrightness.sidebarPreview \
+    PRODUCT_BUNDLE_IDENTIFIER="$preview_bundle" \
     CODE_SIGN_IDENTITY=- build > "$preview_log" 2>&1; then
     tail -n 80 "$preview_log"
     exit 1
@@ -35,6 +42,6 @@ while read -r process_id executable; do
     fi
 done < <(ps -axo pid=,comm=)
 
-open -n "$preview_app" --args --preview-settings
+open -n "$preview_app" --args "${preview_args[@]}"
 echo "Opened preview: $preview_app"
 echo "Build log: $preview_log"
