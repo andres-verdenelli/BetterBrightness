@@ -7,6 +7,8 @@ struct LightDraft: Identifiable {
     private(set) var ip: String
     var isIPAddressVerified: Bool
     var isEnabled: Bool
+    var brightnessOffset: Int
+    var showInMenu: Bool
     var isHidden: Bool
     var monitorMin: Int
     var monitorMax: Int
@@ -21,6 +23,8 @@ struct LightDraft: Identifiable {
         ip = configuration.ip
         isIPAddressVerified = configuration.isIPAddressVerified
         isEnabled = configuration.isEnabled
+        brightnessOffset = configuration.brightnessOffset
+        showInMenu = configuration.showInMenu
         isHidden = configuration.isHidden
         monitorMin = Int(configuration.mapping.monitorMin.rounded())
         monitorMax = Int(configuration.mapping.monitorMax.rounded())
@@ -38,6 +42,8 @@ struct LightDraft: Identifiable {
         ip = saved.ip
         isIPAddressVerified = saved.isIPAddressVerified
         deviceInfo = saved.deviceInfo
+        brightnessOffset = saved.brightnessOffset
+        showInMenu = saved.showInMenu
     }
 
     static func mergeDiscoveryChanges(_ savedLights: [LightConfiguration], into drafts: inout [LightDraft]) {
@@ -66,7 +72,9 @@ struct LightDraft: Identifiable {
                 lightMinPercent: Double(lightMinPercent),
                 lightMaxPercent: Double(lightMaxPercent)
             ),
-            deviceInfo: deviceInfo
+            deviceInfo: deviceInfo,
+            brightnessOffset: brightnessOffset,
+            showInMenu: showInMenu
         )
     }
 
