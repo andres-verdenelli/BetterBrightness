@@ -49,7 +49,7 @@ struct BetterBrightnessApp: App {
             .background { SettingsPreviewLauncher() }
 #endif
         }
-        .menuBarExtraStyle(.window)
+        .menuBarExtraStyle(.menu)
 
         Settings {
             SettingsView(
@@ -85,7 +85,7 @@ private struct MenuBarContent: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        Group {
             Button(
                 controller.isPaused ? "Resume" : "Pause",
                 systemImage: controller.isPaused ? "play.fill" : "pause.fill"
@@ -104,12 +104,6 @@ private struct MenuBarContent: View {
                 NSApplication.shared.terminate(nil)
             }
         }
-        // Use the system label color without borderless-button tint/dimming.
-        // NSColor remains dynamic for light, dark, and accessibility appearances.
-        .buttonStyle(.plain)
-        .foregroundStyle(Color(nsColor: .labelColor))
-        .padding(14)
-        .frame(width: 290, alignment: .leading)
     }
 }
 private struct GroupPreviewKey: EnvironmentKey {
