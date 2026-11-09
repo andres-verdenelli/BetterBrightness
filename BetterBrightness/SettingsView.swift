@@ -11,7 +11,7 @@ struct SettingsView: View {
     @State private var discoveryResponseWindowText: String
     @State private var discoveryAttemptCountText: String
     @State private var lights: [LightDraft]
-    @State private var isDraggingLight = false
+    @State private var activeDragID: DragSession.ID?
     @State private var selectedIDs: Set<UUID> = []
     @State private var groups: [LightGroup]
     @State private var expandedGroups: Set<UUID> = []
@@ -71,18 +71,18 @@ struct SettingsView: View {
                         }
                         .tag(group.id)
                         .dropDestination(for: String.self) { items, _ in
-                            isDraggingLight = false
+                            activeDragID = nil
                             return acceptDrop(items, destination: group.id)
                         }
                     } else {
                         lightRow(id)
                     }
                 }
-                if isDraggingLight {
+                if activeDragID != nil && !groups.isEmpty {
                     Label("Make independent", systemImage: "arrow.uturn.backward")
                         .font(.caption).foregroundStyle(.secondary)
                         .dropDestination(for: String.self) { items, _ in
-                            isDraggingLight = false
+                            activeDragID = nil
                             return acceptDrop(items, destination: nil)
                         }
                 }
@@ -236,11 +236,22 @@ struct SettingsView: View {
             sidebarRow(light)
                 .tag(id)
                 .itemProvider {
-                    isDraggingLight = true
+                    // List can request this payload during selection; keep it free of UI changes.
                     let ids = selectedIDs.contains(id) ? selectedLightIDs : [id]
-                    let provider = SidebarDragProvider(object: ids.map(\.uuidString).sorted().joined(separator: ",") as NSString)
-                    provider.onEnd = { Task { @MainActor in isDraggingLight = false } }
-                    return provider
+                    return NSItemProvider(object: ids.map(\.uuidString).sorted().joined(separator: ",") as NSString)
+                }
+                .onDragSessionUpdated { session in
+                    switch session.phase {
+                    case .active:
+                        let ids = selectedIDs.contains(id) ? selectedLightIDs : [id]
+                        if groups.contains(where: { !ids.isDisjoint(with: $0.memberIDs) }) {
+                            activeDragID = session.id
+                        }
+                    case .ended, .dataTransferCompleted:
+                        if activeDragID == session.id { activeDragID = nil }
+                    default:
+                        break
+                    }
                 }
 
         }
@@ -1011,11 +1022,6 @@ private struct SettingsHelpButton: View {
             if !shown { isPinned = false }
         }
     }
-}
-
-private final class SidebarDragProvider: NSItemProvider, @unchecked Sendable {
-    var onEnd: (@Sendable () -> Void)?
-    deinit { onEnd?() }
 }
 
 struct DiscoverySettingsContent: View {
