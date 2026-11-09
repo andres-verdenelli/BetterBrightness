@@ -7,6 +7,7 @@ struct LightDraft: Identifiable {
     var ip: String
     var isIPAddressVerified: Bool
     var isEnabled: Bool
+    var isHidden: Bool
     var monitorMin: Int
     var monitorMax: Int
     var lightMinPercent: Int
@@ -22,6 +23,7 @@ struct LightDraft: Identifiable {
         ip: String = "",
         isIPAddressVerified: Bool = true,
         isEnabled: Bool = false,
+        isHidden: Bool = false,
         monitorMin: Int = 40,
         monitorMax: Int = 80,
         lightMinPercent: Int = 1,
@@ -35,6 +37,7 @@ struct LightDraft: Identifiable {
         savedIPAddress = ip.trimmingCharacters(in: .whitespacesAndNewlines)
         self.isIPAddressVerified = isIPAddressVerified
         self.isEnabled = isEnabled
+        self.isHidden = isHidden
         self.monitorMin = monitorMin
         self.monitorMax = monitorMax
         self.lightMinPercent = lightMinPercent
@@ -50,6 +53,7 @@ struct LightDraft: Identifiable {
         savedIPAddress = configuration.ip.trimmingCharacters(in: .whitespacesAndNewlines)
         isIPAddressVerified = configuration.isIPAddressVerified
         isEnabled = configuration.isEnabled
+        isHidden = configuration.isHidden
         monitorMin = Int(configuration.mapping.monitorMin.rounded())
         monitorMax = Int(configuration.mapping.monitorMax.rounded())
         lightMinPercent = Int(
@@ -135,6 +139,7 @@ struct LightDraft: Identifiable {
             ip: ip,
             isIPAddressVerified: destination?.isIPAddressVerified ?? isIPAddressVerified,
             isEnabled: isEnabled,
+            isHidden: isHidden,
             port: 38899,
             mapping: BrightnessMapping(
                 monitorMin: Double(monitorMin),

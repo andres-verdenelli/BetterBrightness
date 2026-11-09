@@ -3,7 +3,36 @@ import SwiftUI
 
 @main
 struct BetterBrightnessApp: App {
-    @StateObject private var controller = BrightnessController()
+    @StateObject private var controller: BrightnessController
+    private let isGroupPreview: Bool
+
+    init() {
+#if DEBUG
+        isGroupPreview = ProcessInfo.processInfo.arguments.contains("--group-preview")
+#else
+        isGroupPreview = false
+#endif
+        if isGroupPreview {
+            let defaults = UserDefaults(suiteName: "andydev.BetterBrightness.groupsDemo.v1")!
+            let store = ConfigurationStore(defaults: defaults)
+            if defaults.data(forKey: "betterBrightness.configuration") == nil {
+                let mapping = BrightnessMapping(monitorMin: 40, monitorMax: 80, lightMinPercent: 1, lightMaxPercent: 100)
+                let lights = ["Desk", "Floor", "Shelf", "Window"].enumerated().map { index, name in
+                    LightConfiguration(name: name, macAddress: String(format: "0200000000%02x", index),
+                                       ip: "192.0.2.\(index + 10)", isEnabled: index == 0,
+                                       mapping: index == 1 ? BrightnessMapping(monitorMin: 20, monitorMax: 90, lightMinPercent: 10, lightMaxPercent: 70) : mapping)
+                }
+                do {
+                    try store.save(displayID: 3, lights: lights)
+                    _ = try store.createGroup(name: "Studio", memberIDs: [lights[2].id, lights[3].id], sourceID: lights[2].id)
+                }
+                catch { assertionFailure("Could not prepare preview: \(error)") }
+            }
+            _controller = StateObject(wrappedValue: BrightnessController(configurationStore: store, startsServices: false))
+        } else {
+            _controller = StateObject(wrappedValue: BrightnessController())
+        }
+    }
     @StateObject private var launchAtLogin = LaunchAtLoginController()
 
     var body: some Scene {
@@ -27,6 +56,7 @@ struct BetterBrightnessApp: App {
                 configurationStore: controller.configurationStore,
                 launchAtLogin: launchAtLogin
             )
+                .environment(\.isGroupPreview, isGroupPreview)
                 .frame(minWidth: 740, minHeight: 560)
         }
         .defaultSize(width: 820, height: 640)
@@ -115,5 +145,16 @@ struct DiscoveryMenuContent: View {
                 Text("\(summary.invalidatedIPs) waiting for rediscovery")
             }
         }
+    }
+}
+
+private struct GroupPreviewKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var isGroupPreview: Bool {
+        get { self[GroupPreviewKey.self] }
+        set { self[GroupPreviewKey.self] = newValue }
     }
 }

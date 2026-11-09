@@ -3,8 +3,9 @@ import Foundation
 import Network
 
 enum ConfigurationError: LocalizedError {
+    case invalidGroup(String)
+    case storageFailure
     case invalidDisplayID
-    case noLights
     case invalidIPAddress(String)
     case invalidMACAddress(String)
     case duplicateIPAddress(String)
@@ -17,10 +18,12 @@ enum ConfigurationError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
+        case .invalidGroup(let message):
+            return message
+        case .storageFailure:
+            return "The configuration could not be saved. No changes were applied."
         case .invalidDisplayID:
             return "The monitor ID must be greater than zero."
-        case .noLights:
-            return "Add at least one WiZ light."
         case .invalidIPAddress(let ip):
             return "\(ip.isEmpty ? "One light" : ip) is not a valid IPv4 address."
         case .invalidMACAddress(let macAddress):
@@ -48,13 +51,24 @@ final class ConfigurationStore: ObservableObject {
     @Published private(set) var configuration: AppConfiguration
 
     private let defaults: UserDefaults
+    private let fileURL: URL?
+    private let writeData: ((Data) throws -> Void)?
     private let storageKey = "betterBrightness.configuration"
 
-    init(defaults: UserDefaults = .standard) {
+    convenience init() {
+        let root = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let file = root.appendingPathComponent(Bundle.main.bundleIdentifier ?? "BetterBrightness", isDirectory: true)
+            .appendingPathComponent("Configuration.json")
+        self.init(defaults: .standard, fileURL: file)
+    }
+
+    init(defaults: UserDefaults, fileURL: URL? = nil, writeData: ((Data) throws -> Void)? = nil) {
         self.defaults = defaults
+        self.writeData = writeData
+        self.fileURL = fileURL
 
         if
-            let data = defaults.data(forKey: storageKey),
+            let data = fileURL.flatMap({ try? Data(contentsOf: $0) }) ?? defaults.data(forKey: storageKey),
             let savedConfiguration = try? JSONDecoder().decode(
                 AppConfiguration.self,
                 from: data
@@ -71,13 +85,11 @@ final class ConfigurationStore: ObservableObject {
     func save(
         displayID: Int,
         lights: [LightConfiguration],
-        discovery: DiscoveryConfiguration? = nil
+        discovery: DiscoveryConfiguration? = nil,
+        groups: [LightGroup]? = nil
     ) throws {
         guard displayID > 0 else {
             throw ConfigurationError.invalidDisplayID
-        }
-        guard !lights.isEmpty else {
-            throw ConfigurationError.noLights
         }
 
         let discovery = discovery ?? configuration.discovery
@@ -93,10 +105,14 @@ final class ConfigurationStore: ObservableObject {
         }
 
         var normalizedLights: [LightConfiguration] = []
+        var usedIDs = Set<UUID>()
         var usedAddresses = Set<String>()
         var usedMACAddresses = Set<String>()
 
         for light in lights {
+            guard usedIDs.insert(light.id).inserted else {
+                throw ConfigurationError.invalidGroup("Each light must have a unique identity.")
+            }
             let ip = light.ip.trimmingCharacters(in: .whitespacesAndNewlines)
 
             guard IPv4Address(ip) != nil else {
@@ -153,7 +169,8 @@ final class ConfigurationStore: ObservableObject {
                     macAddress: normalizedMACAddress,
                     ip: ip,
                     isIPAddressVerified: light.isIPAddressVerified,
-                    isEnabled: light.isEnabled,
+                    isEnabled: light.isHidden ? false : light.isEnabled,
+                    isHidden: light.isHidden,
                     port: 38899,
                     mapping: BrightnessMapping(
                         monitorMin: light.mapping.monitorMin,
@@ -166,10 +183,12 @@ final class ConfigurationStore: ObservableObject {
             )
         }
 
+        let groups = try validatedGroups(groups ?? configuration.groups, lights: normalizedLights)
         let newConfiguration = AppConfiguration(
             monitor: MonitorConfiguration(displayID: displayID),
             lights: normalizedLights,
-            discovery: discovery
+            discovery: discovery,
+            groups: groups
         )
         try persist(newConfiguration)
     }
@@ -268,7 +287,8 @@ final class ConfigurationStore: ObservableObject {
         let newConfiguration = AppConfiguration(
             monitor: configuration.monitor,
             lights: lights,
-            discovery: configuration.discovery
+            discovery: configuration.discovery,
+            groups: configuration.groups
         )
         try persist(newConfiguration)
 
@@ -279,6 +299,110 @@ final class ConfigurationStore: ObservableObject {
             identifiedExistingLights: identifiedExistingLightCount,
             invalidatedIPs: invalidatedLightIDs.count
         )
+    }
+
+    private func validatedGroups(_ groups: [LightGroup], lights: [LightConfiguration]) throws -> [LightGroup] {
+        var names = Set<String>()
+        var groupIDs = Set<UUID>()
+        var members = Set<UUID>()
+        return try groups.map { group in
+            var result = group
+            result.name = group.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !result.name.isEmpty, names.insert(result.name.lowercased()).inserted else {
+                throw ConfigurationError.invalidGroup("Use a nonempty, unique group name.")
+            }
+            guard groupIDs.insert(group.id).inserted, !group.memberIDs.isEmpty else {
+                throw ConfigurationError.invalidGroup("Groups must have a unique identity and at least one light.")
+            }
+            for id in group.memberIDs {
+                guard lights.contains(where: { $0.id == id && !$0.isHidden }), members.insert(id).inserted else {
+                    throw ConfigurationError.invalidGroup("Each visible light can belong to only one group.")
+                }
+            }
+            let m = group.mapping
+            guard m.monitorMin.isFinite, m.monitorMax.isFinite,
+                  (0...100).contains(m.monitorMin), (0...100).contains(m.monitorMax), m.monitorMin < m.monitorMax,
+                  m.lightMinPercent.isFinite, m.lightMaxPercent.isFinite,
+                  (1...100).contains(m.lightMinPercent), (1...100).contains(m.lightMaxPercent), m.lightMinPercent < m.lightMaxPercent else {
+                throw ConfigurationError.invalidGroup("The group brightness ranges are invalid.")
+            }
+            return result
+        }
+    }
+
+    @discardableResult
+    func createGroup(name: String, memberIDs: Set<UUID>, sourceID: UUID) throws -> UUID {
+        guard memberIDs.count >= 2, memberIDs.contains(sourceID),
+              let source = configuration.lights.first(where: { $0.id == sourceID }),
+              memberIDs.allSatisfy({ id in
+                  configuration.lights.contains { $0.id == id && !$0.isHidden } && configuration.group(containing: id) == nil
+              }) else {
+            throw ConfigurationError.invalidGroup("Select at least two independent, visible lights.")
+        }
+        let group = LightGroup(name: name, memberIDs: configuration.lights.filter { memberIDs.contains($0.id) }.map(\.id),
+                               isEnabled: source.isEnabled, mapping: source.mapping)
+        try save(displayID: configuration.monitor.displayID, lights: configuration.lights,
+                 groups: configuration.groups + [group])
+        return group.id
+    }
+
+    func updateGroup(_ group: LightGroup) throws {
+        guard let index = configuration.groups.firstIndex(where: { $0.id == group.id }),
+              Set(group.memberIDs) == Set(configuration.groups[index].memberIDs) else {
+            throw ConfigurationError.invalidGroup("The group changed. Select it again before editing.")
+        }
+        var groups = configuration.groups
+        groups[index] = group
+        try save(displayID: configuration.monitor.displayID, lights: configuration.lights, groups: groups)
+    }
+
+    /// One save commits both membership and copied outgoing settings.
+    func moveLights(_ ids: Set<UUID>, to destinationID: UUID?) throws {
+        guard !ids.isEmpty, ids.allSatisfy({ id in configuration.lights.contains { $0.id == id && !$0.isHidden } }),
+              destinationID == nil || configuration.groups.contains(where: { $0.id == destinationID }) else {
+            throw ConfigurationError.invalidGroup("Select visible lights and an existing destination group.")
+        }
+        var lights = configuration.lights
+        var groups = configuration.groups
+        for index in lights.indices where ids.contains(lights[index].id) {
+            let id = lights[index].id
+            if configuration.group(containing: id)?.id == destinationID { continue }
+            if let previous = configuration.group(containing: id) {
+                lights[index].mapping = previous.mapping
+                lights[index].isEnabled = true
+            }
+            for g in groups.indices { groups[g].memberIDs.removeAll { $0 == id } }
+            if let destinationID, let g = groups.firstIndex(where: { $0.id == destinationID }) {
+                groups[g].memberIDs.append(id)
+            }
+        }
+        groups.removeAll { $0.memberIDs.isEmpty }
+        try save(displayID: configuration.monitor.displayID, lights: lights, groups: groups)
+    }
+
+    func ungroup(_ id: UUID) throws {
+        guard let group = configuration.groups.first(where: { $0.id == id }) else { return }
+        try moveLights(Set(group.memberIDs), to: nil)
+    }
+
+    func setLightHidden(_ id: UUID, hidden: Bool) throws {
+        guard let index = configuration.lights.firstIndex(where: { $0.id == id }) else { return }
+        var lights = configuration.lights
+        var groups = configuration.groups
+        if let group = configuration.group(containing: id) { lights[index].mapping = group.mapping }
+        lights[index].isHidden = hidden
+        lights[index].isEnabled = false
+        for g in groups.indices { groups[g].memberIDs.removeAll { $0 == id } }
+        groups.removeAll { $0.memberIDs.isEmpty }
+        try save(displayID: configuration.monitor.displayID, lights: lights, groups: groups)
+    }
+
+    func removeLight(_ id: UUID) throws {
+        let lights = configuration.lights.filter { $0.id != id }
+        var groups = configuration.groups
+        for g in groups.indices { groups[g].memberIDs.removeAll { $0 == id } }
+        groups.removeAll { $0.memberIDs.isEmpty }
+        try save(displayID: configuration.monitor.displayID, lights: lights, groups: groups)
     }
 
     private static func invalidatingAmbiguousAddresses(
@@ -300,13 +424,24 @@ final class ConfigurationStore: ObservableObject {
         return AppConfiguration(
             monitor: configuration.monitor,
             lights: lights,
-            discovery: configuration.discovery
+            discovery: configuration.discovery,
+            groups: configuration.groups
         )
     }
 
     private func persist(_ newConfiguration: AppConfiguration) throws {
         let data = try JSONEncoder().encode(newConfiguration)
-        defaults.set(data, forKey: storageKey)
+        if let writeData {
+            try writeData(data)
+        } else if let fileURL {
+            try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: fileURL, options: .atomic)
+        } else {
+            defaults.set(data, forKey: storageKey)
+            guard defaults.data(forKey: storageKey) == data else {
+                throw ConfigurationError.storageFailure
+            }
+        }
         configuration = newConfiguration
     }
 }

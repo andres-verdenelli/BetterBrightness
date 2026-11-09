@@ -82,5 +82,6 @@ struct DiscoveryControllerTests {
         print("PASS: save failures surface without partially applying discovery")
 
         try LightDraftTests.run()
+        try LightGroupTests.run()
     }
 }

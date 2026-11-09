@@ -14,27 +14,32 @@ struct AppConfiguration: Codable {
     let monitor: MonitorConfiguration
     let lights: [LightConfiguration]
     let discovery: DiscoveryConfiguration
+    let groups: [LightGroup]
 
     init(
         monitor: MonitorConfiguration,
         lights: [LightConfiguration],
-        discovery: DiscoveryConfiguration = .standard
+        discovery: DiscoveryConfiguration = .standard,
+        groups: [LightGroup] = []
     ) {
         self.monitor = monitor
         self.lights = lights
         self.discovery = discovery
+        self.groups = groups
     }
 
     private enum CodingKeys: String, CodingKey {
         case monitor
         case lights
         case discovery
+        case groups
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         monitor = try container.decode(MonitorConfiguration.self, forKey: .monitor)
         lights = try container.decode([LightConfiguration].self, forKey: .lights)
+        groups = try container.decodeIfPresent([LightGroup].self, forKey: .groups) ?? []
         discovery = try container.decodeIfPresent(
             DiscoveryConfiguration.self,
             forKey: .discovery
@@ -114,6 +119,7 @@ struct LightConfiguration: Codable, Identifiable {
     var ip: String
     var isIPAddressVerified: Bool
     var isEnabled: Bool
+    var isHidden: Bool
     var port: UInt16
     var mapping: BrightnessMapping
     var deviceInfo: WiZDeviceInfo?
@@ -125,6 +131,7 @@ struct LightConfiguration: Codable, Identifiable {
         ip: String,
         isIPAddressVerified: Bool = true,
         isEnabled: Bool = true,
+        isHidden: Bool = false,
         port: UInt16 = 38899,
         mapping: BrightnessMapping,
         deviceInfo: WiZDeviceInfo? = nil
@@ -135,6 +142,7 @@ struct LightConfiguration: Codable, Identifiable {
         self.ip = ip
         self.isIPAddressVerified = isIPAddressVerified
         self.isEnabled = isEnabled
+        self.isHidden = isHidden
         self.port = port
         self.mapping = mapping
         self.deviceInfo = deviceInfo
@@ -147,6 +155,7 @@ struct LightConfiguration: Codable, Identifiable {
         case ip
         case isIPAddressVerified
         case isEnabled
+        case isHidden
         case port
         case mapping
         case deviceInfo
@@ -163,6 +172,7 @@ struct LightConfiguration: Codable, Identifiable {
             forKey: .isIPAddressVerified
         ) ?? true
         isEnabled = try container.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? true
+        isHidden = try container.decodeIfPresent(Bool.self, forKey: .isHidden) ?? false
         port = try container.decodeIfPresent(UInt16.self, forKey: .port) ?? 38899
         mapping = try container.decode(BrightnessMapping.self, forKey: .mapping)
         deviceInfo = try container.decodeIfPresent(WiZDeviceInfo.self, forKey: .deviceInfo)
@@ -181,7 +191,7 @@ struct WiZDeviceInfo: Codable {
     var region: String?
 }
 
-struct BrightnessMapping: Codable {
+struct BrightnessMapping: Codable, Equatable {
     let monitorMin: Double
     let monitorMax: Double
     let lightMinPercent: Double
@@ -297,18 +307,31 @@ final class BrightnessController: ObservableObject {
     private var notificationObserver: NSObjectProtocol?
     private var udpConnections: [UUID: NWConnection] = [:]
     private var lastMonitorBrightness: Double?
+    private let permitsNetwork: Bool
+    private let sendOverride: ((Int, LightConfiguration) -> Void)?
 
     convenience init() {
         self.init(configurationStore: ConfigurationStore())
     }
 
-    init(configurationStore: ConfigurationStore) {
+    init(configurationStore: ConfigurationStore, startsServices: Bool = true,
+         send: ((Int, LightConfiguration) -> Void)? = nil) {
+        permitsNetwork = startsServices
+        sendOverride = send
         self.configurationStore = configurationStore
-        self.discoveryController = DiscoveryController(
-            configurationStore: configurationStore
-        )
-        startListening()
-        discoveryController.discoverLights()
+        if startsServices {
+            self.discoveryController = DiscoveryController(configurationStore: configurationStore)
+        } else {
+            self.discoveryController = DiscoveryController(configurationStore: configurationStore) { _, _, completion in
+                completion(.success([]))
+            }
+        }
+        if startsServices {
+            startListening()
+            discoveryController.discoverLights()
+        } else {
+            statusText = "Simulated preview · no device control"
+        }
     }
 
     private var configuration: AppConfiguration {
@@ -398,12 +421,13 @@ final class BrightnessController: ObservableObject {
         }
     }
 
-    private func sendBrightnessToEnabledLights(_ monitorBrightness: Double) {
-        let enabledLights = configuration.lights.filter {
-            $0.isEnabled && $0.verifiedIPAddress != nil
+    func sendBrightnessToEnabledLights(_ monitorBrightness: Double) {
+        let effectiveLights = configuration.effectiveLights
+        let enabledLights = effectiveLights.filter {
+            !$0.isHidden && $0.isEnabled && $0.verifiedIPAddress != nil
         }
-        let unavailableEnabledLightCount = configuration.lights.filter {
-            $0.isEnabled && $0.verifiedIPAddress == nil
+        let unavailableEnabledLightCount = effectiveLights.filter {
+            !$0.isHidden && $0.isEnabled && $0.verifiedIPAddress == nil
         }.count
 
         guard !isPaused else { return }
@@ -441,11 +465,15 @@ final class BrightnessController: ObservableObject {
     private func sendBrightness(_ brightness: Int, to light: LightConfiguration) {
         guard
             !isPaused,
+            !light.isHidden,
             let ipAddress = light.verifiedIPAddress,
             let port = NWEndpoint.Port(rawValue: light.port)
         else {
             return
         }
+
+        if let sendOverride { sendOverride(brightness, light); return }
+        guard permitsNetwork else { return }
 
         let payload = """
         {"id":1,"method":"setPilot","params":{"dimming":\(brightness)}}
@@ -482,5 +510,32 @@ final class BrightnessController: ObservableObject {
             connection.cancel()
         }
         udpConnections.removeAll()
+    }
+}
+
+/// A group owns the effective Sync and mapping. Members retain their UUID and device identity.
+struct LightGroup: Codable, Identifiable {
+    var id: UUID = UUID()
+    var name: String
+    var memberIDs: [UUID]
+    var isEnabled: Bool
+    var mapping: BrightnessMapping
+}
+
+extension AppConfiguration {
+    func group(containing lightID: UUID) -> LightGroup? {
+        groups.first { $0.memberIDs.contains(lightID) }
+    }
+
+    var effectiveLights: [LightConfiguration] {
+        lights.map { light in
+            var effective = light
+            if let group = group(containing: light.id) {
+                effective.isEnabled = group.isEnabled
+                effective.mapping = group.mapping
+            }
+            if light.isHidden { effective.isEnabled = false }
+            return effective
+        }
     }
 }
