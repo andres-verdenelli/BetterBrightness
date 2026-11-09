@@ -214,6 +214,19 @@ final class ConfigurationStore: ObservableObject {
         try persist(newConfiguration)
     }
 
+    func setSyncEnabled(_ enabled: Bool, for id: UUID) throws {
+        var lights = configuration.lights
+        var groups = configuration.groups
+        if let index = groups.firstIndex(where: { $0.id == id }) {
+            groups[index].isEnabled = enabled
+        } else if let index = lights.firstIndex(where: { $0.id == id && !$0.isHidden }), configuration.group(containing: id) == nil {
+            lights[index].isEnabled = enabled
+        } else {
+            throw ConfigurationError.invalidGroup("This Sync destination is no longer available.")
+        }
+        try save(displayID: configuration.monitor.displayID, lights: lights, groups: groups)
+    }
+
     func setBrightnessOffset(_ offset: Int, for id: UUID) throws {
         var lights = configuration.lights
         var groups = configuration.groups

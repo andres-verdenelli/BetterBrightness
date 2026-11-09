@@ -13,6 +13,7 @@ struct BetterBrightnessApp: App {
 #else
         isGroupPreview = false
 #endif
+#if DEBUG
         if isGroupPreview {
             let defaults = UserDefaults(suiteName: "andydev.BetterBrightness.groupsDemo.v1")!
             // Start every simulated UI session from the same review fixture.
@@ -48,6 +49,11 @@ struct BetterBrightnessApp: App {
             _controller = StateObject(wrappedValue: controller)
             statusMenu = BrightnessStatusMenu(controller: controller)
         }
+#else
+        let controller = BrightnessController()
+        _controller = StateObject(wrappedValue: controller)
+        statusMenu = BrightnessStatusMenu(controller: controller)
+#endif
     }
     @StateObject private var launchAtLogin = LaunchAtLoginController()
 
@@ -61,6 +67,11 @@ struct BetterBrightnessApp: App {
 
     var body: some Scene {
 #if DEBUG
+        Window("Diagnostics", id: "debug-diagnostics") {
+            DebugDiagnosticsView(controller: controller, store: controller.configurationStore, simulated: isGroupPreview)
+        }
+        .defaultSize(width: 520, height: 460)
+        .defaultLaunchBehavior(.suppressed)
         Window("BetterBrightness Preview", id: "preview-launcher") {
             StartupSettingsLauncher().frame(width: 240, height: 100)
         }
