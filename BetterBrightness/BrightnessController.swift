@@ -27,7 +27,7 @@ struct AppConfiguration: Codable {
         sidebarOrder: [UUID]? = nil
     ) {
         let grouped = Set(groups.flatMap(\.memberIDs))
-        let entries: [(UUID, String)] = groups.map { ($0.id, $0.name) } + lights.filter { !$0.isHidden && !grouped.contains($0.id) }.map { ($0.id, $0.name.isEmpty ? $0.ip : $0.name) }
+        let entries: [(UUID, String)] = groups.map { ($0.id, $0.name) } + lights.filter { !$0.isHidden && !grouped.contains($0.id) }.map { ($0.id, Self.sidebarDisplayName($0)) }
         let valid = Set(entries.map { $0.0 })
         var seen = Set<UUID>()
         let preserved = (sidebarOrder ?? []).filter { valid.contains($0) && seen.insert($0).inserted }
@@ -60,8 +60,8 @@ struct AppConfiguration: Codable {
         if order == nil {
             for index in groups.indices {
                 groups[index].memberIDs.sort { a, b in
-                    let first = lights.first { $0.id == a }?.name ?? ""
-                    let second = lights.first { $0.id == b }?.name ?? ""
+                    let first = lights.first { $0.id == a }.map(Self.sidebarDisplayName) ?? "Unnamed Light"
+                    let second = lights.first { $0.id == b }.map(Self.sidebarDisplayName) ?? "Unnamed Light"
                     let comparison = first.localizedStandardCompare(second)
                     return comparison == .orderedSame ? a.uuidString < b.uuidString : comparison == .orderedAscending
                 }
@@ -73,6 +73,11 @@ struct AppConfiguration: Codable {
                   groups: groups,
                   nextLightNumber: try container.decodeIfPresent(Int.self, forKey: .nextLightNumber),
                   sidebarOrder: order)
+    }
+
+    private static func sidebarDisplayName(_ light: LightConfiguration) -> String {
+        let name = light.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "Unnamed Light" : name
     }
 
     private static func inferredNextLightNumber(_ lights: [LightConfiguration]) -> Int {

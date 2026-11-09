@@ -4,6 +4,7 @@ import Foundation
 enum LightGroupTests {
     @MainActor static func run() throws {
         try ordering()
+        try unnamedOrderMigration()
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         let suite = "BetterBrightness.GroupTests.\(UUID().uuidString)"
@@ -258,6 +259,35 @@ enum LightGroupTests {
         precondition(SidebarOrder.rootInsertion(roots: roots, children: children, hovered: UUID(), afterHeader: true) == nil)
         print("PASS: root insertion works before, after and between folders, including expanded descendants")
         print("PASS: manual order migrates, persists, preserves settings and relative order; invalid and failed moves are atomic")
+    }
+
+    @MainActor private static func unnamedOrderMigration() throws {
+        let mapping = BrightnessMapping(monitorMin: 20, monitorMax: 90, lightMinPercent: 1, lightMaxPercent: 100)
+        let lights = ["", "Desk", " \n ", "  Bed  "].enumerated().map { index, name in
+            LightConfiguration(name: name, ip: "192.0.2.\(index + 1)", isEnabled: false, mapping: mapping)
+        }
+        let expected = lights.sorted { a, b in
+            let first = LightDraft(configuration: a).displayName
+            let second = LightDraft(configuration: b).displayName
+            let comparison = first.localizedStandardCompare(second)
+            return comparison == .orderedSame ? a.id.uuidString < b.id.uuidString : comparison == .orderedAscending
+        }.map(\.id)
+        func migrate(_ configuration: AppConfiguration) throws -> AppConfiguration {
+            var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(configuration)) as! [String: Any]
+            json.removeValue(forKey: "sidebarOrder")
+            return try JSONDecoder().decode(AppConfiguration.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        let independent = AppConfiguration(monitor: MonitorConfiguration(displayID: 3), lights: lights)
+        let migratedIndependent = try migrate(independent)
+        precondition(migratedIndependent.sidebarOrder == expected)
+        let group = LightGroup(name: "Room", memberIDs: lights.map(\.id), isEnabled: false, mapping: mapping)
+        let grouped = AppConfiguration(monitor: independent.monitor, lights: lights, groups: [group])
+        let migratedGroup = try migrate(grouped)
+        precondition(migratedGroup.groups[0].memberIDs == expected)
+        let manual = AppConfiguration(monitor: independent.monitor, lights: lights, sidebarOrder: lights.map(\.id))
+        let reloaded = try JSONDecoder().decode(AppConfiguration.self, from: JSONEncoder().encode(manual))
+        precondition(reloaded.sidebarOrder == lights.map(\.id), "Existing manual positions must not be sorted again")
+        print("PASS: legacy root and member order use displayed names for empty, whitespace-only and trimmed names")
     }
 
 }
