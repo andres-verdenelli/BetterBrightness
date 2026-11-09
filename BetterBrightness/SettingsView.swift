@@ -55,77 +55,9 @@ struct SettingsView: View {
 
     var body: some View {
         SettingsSplitView(isSidebarVisible: $isSidebarVisible) {
-            List(selection: selectionBinding) {
-                ForEach(rootIDs, id: \.self) { id in
-                    if let group = groups.first(where: { $0.id == id }) {
-                        DisclosureGroup(isExpanded: expansionBinding(group.id)) {
-                            ForEach(memberIDs(group), id: \.self) { id in lightRow(id) }
-                        } label: {
-                            Label {
-                                HStack {
-                                    Text(group.name).lineLimit(1)
-                                    Spacer()
-                                    Text("\(group.memberIDs.count)").foregroundStyle(.secondary)
-                                }
-                            } icon: { Image(systemName: "folder") }
-                        }
-                        .tag(group.id)
-                        .dropDestination(for: String.self) { items, _ in
-                            activeDragID = nil
-                            return acceptDrop(items, destination: group.id)
-                        }
-                    } else {
-                        lightRow(id)
-                    }
-                }
-                if activeDragID != nil && !groups.isEmpty {
-                    Label("Make independent", systemImage: "arrow.uturn.backward")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .dropDestination(for: String.self) { items, _ in
-                            activeDragID = nil
-                            return acceptDrop(items, destination: nil)
-                        }
-                }
-            }
-            .listStyle(.sidebar)
-            .contextMenu(forSelectionType: UUID.self) { ids in
-                sidebarContextMenu(ids)
-            } primaryAction: { ids in
-                if ids.count == 1, let id = ids.first { beginRename(id) }
-            }
+            sidebar
         } detail: {
-            if let id = selectedLightID,
-               let index = groups.firstIndex(where: { $0.id == id }) {
-                GroupDetailView(group: $groups[index],
-                                members: lights.filter { groups[index].memberIDs.contains($0.id) },
-                                onCommit: { saveConfiguration() },
-                                onSelect: { selectItem($0) },
-                                onUngroup: { groupPendingUngroup = groups[index] })
-                    .id(id)
-            } else if let id = selectedLightID,
-                      let index = lights.firstIndex(where: { $0.id == id && !$0.isHidden }) {
-                LightDetailView(
-                    light: $lights[index],
-                    group: groups.first { $0.memberIDs.contains(id) },
-                    onSelectGroup: { selectItem($0) },
-                    onLeaveGroup: { runAction { try configurationStore.moveLights([id], to: nil) } },
-                    onHide: { runAction { try configurationStore.setLightHidden(id, hidden: true) } },
-                    onRemove: { requestRemoval(lights[index]) },
-                    isRenaming: renamingLightID == id,
-                    renameText: $renameText,
-                    onBeginRename: { beginRename(id) },
-                    onFinishRename: finishRename,
-                    onCancelRename: cancelRename,
-                    onCommit: {
-                        guard selectedLightID == id else { return }
-                        saveConfiguration()
-                    }
-                )
-                .id(id)
-            } else {
-                ContentUnavailableView(selectedIDs.count > 1 ? "\(selectedIDs.count) Items Selected" : "Select a Light or Group",
-                                       systemImage: "folder")
-            }
+            detail
         }
         .ignoresSafeArea(.container, edges: .top)
         .navigationTitle(groups.first(where: { $0.id == selectedLightID })?.name ?? lights.first(where: { $0.id == selectedLightID })?.displayName ?? "Settings")
@@ -185,6 +117,90 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: { light in
             Text("\(light.displayName) will be removed from BetterBrightness.")
+        }
+    }
+
+    private var sidebar: some View {
+        List(selection: selectionBinding) {
+            ForEach(rootIDs, id: \.self) { id in
+                if let group = groups.first(where: { $0.id == id }) {
+                    groupRow(group)
+                } else {
+                    lightRow(id)
+                }
+            }
+            if activeDragID != nil && !groups.isEmpty {
+                Label("Make independent", systemImage: "arrow.uturn.backward")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .dropDestination(for: String.self) { items, _ in
+                        activeDragID = nil
+                        return acceptDrop(items, destination: nil)
+                    }
+            }
+        }
+        .listStyle(.sidebar)
+        .contextMenu(forSelectionType: UUID.self) { ids in
+            sidebarContextMenu(ids)
+        } primaryAction: { ids in
+            if ids.count == 1, let id = ids.first { beginRename(id) }
+        }
+    }
+
+    private func groupRow(_ group: LightGroup) -> some View {
+        DisclosureGroup(isExpanded: expansionBinding(group.id)) {
+            ForEach(memberIDs(group), id: \.self) { id in lightRow(id) }
+        } label: {
+            groupLabel(group)
+        }
+        .tag(group.id)
+        .dropDestination(for: String.self) { items, _ in
+            activeDragID = nil
+            return acceptDrop(items, destination: group.id)
+        }
+    }
+
+    private func groupLabel(_ group: LightGroup) -> some View {
+        Label {
+            HStack {
+                Text(group.name).lineLimit(1)
+                Spacer()
+                Text("\(group.memberIDs.count)").foregroundStyle(.secondary)
+            }
+        } icon: { Image(systemName: "folder") }
+    }
+
+    @ViewBuilder private var detail: some View {
+        if let id = selectedLightID,
+           let index = groups.firstIndex(where: { $0.id == id }) {
+            GroupDetailView(group: $groups[index],
+                            members: lights.filter { groups[index].memberIDs.contains($0.id) },
+                            onCommit: { saveConfiguration() },
+                            onSelect: { selectItem($0) },
+                            onUngroup: { groupPendingUngroup = groups[index] })
+                .id(id)
+        } else if let id = selectedLightID,
+                  let index = lights.firstIndex(where: { $0.id == id && !$0.isHidden }) {
+            LightDetailView(
+                light: $lights[index],
+                group: groups.first { $0.memberIDs.contains(id) },
+                onSelectGroup: { selectItem($0) },
+                onLeaveGroup: { runAction { try configurationStore.moveLights([id], to: nil) } },
+                onHide: { runAction { try configurationStore.setLightHidden(id, hidden: true) } },
+                onRemove: { requestRemoval(lights[index]) },
+                isRenaming: renamingLightID == id,
+                renameText: $renameText,
+                onBeginRename: { beginRename(id) },
+                onFinishRename: finishRename,
+                onCancelRename: cancelRename,
+                onCommit: {
+                    guard selectedLightID == id else { return }
+                    saveConfiguration()
+                }
+            )
+            .id(id)
+        } else {
+            ContentUnavailableView(selectedIDs.count > 1 ? "\(selectedIDs.count) Items Selected" : "Select a Light or Group",
+                                   systemImage: "folder")
         }
     }
 
